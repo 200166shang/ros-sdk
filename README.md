@@ -28,7 +28,7 @@ pip install -r scripts/requirements.txt
 ./rb docker build-image
 
 # 3. Start the development environment
-./rb up
+./rb docker up
 
 # 4. Build the project
 ./rb build
@@ -37,7 +37,7 @@ pip install -r scripts/requirements.txt
 ./rb shell
 
 # 6. Stop when done
-./rb down
+./rb docker down
 ```
 
 For the full development setup guide, see the project documentation in `docs/`.
@@ -49,8 +49,7 @@ rb                    Development CLI entry point
 docker/               Dockerfile and entrypoint
 scripts/              CLI implementation (Python, click-based)
 docs/                 Documentation
-packages/ros2_sdk/    ROS2-facing modules (lifecycle, health, recovery)
-packages/infra/       Infrastructure primitives (logging, utilities)
+packages/ros2_sdk/    Single ROS2 package containing all runtime modules
 ```
 
 ## License
