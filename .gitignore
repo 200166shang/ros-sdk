@@ -15,6 +15,7 @@ __pycache__/
 
 # Conan
 conan_cache/
+CMakeUserPresets.json
 
 # Internal planning docs — user-facing docs (API, README) are committed
 docs/prd.md
