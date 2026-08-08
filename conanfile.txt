@@ -5,7 +5,7 @@
 
 [requires]
 spdlog/1.14.1        # Structured logging
-nlohmann-json/3.11.3 # JSON — structured log payloads and configuration
+nlohmann_json/3.11.3 # JSON — structured log payloads and configuration
 gtest/1.14.0         # Unit testing
 
 [generators]

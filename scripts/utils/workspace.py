@@ -22,11 +22,11 @@ class WorkspaceManager:
         self._docker.exec(
             "bash", "-c",
             "conan install . "
-            "-of build "
+            "--output-folder=build "
             "--build=missing "
             "-s build_type=Release "
             "-s compiler.cppstd=17 "
-            "&& . build/build/Release/generators/conanbuild.sh "
+            "&& . build/conanbuild.sh "
             "&& colcon build --symlink-install",
         )
 
@@ -43,10 +43,14 @@ class WorkspaceManager:
         """Run clang-format (dry-run) and clang-tidy."""
         self._docker.exec(
             "bash", "-c",
-            "find packages -name '*.hpp' -o -name '*.cpp' "
-            "| xargs clang-format --dry-run --Werror "
-            "&& find packages -name '*.hpp' -o -name '*.cpp' "
-            "| xargs clang-tidy -p build",
+            "src_files=$(find packages -name '*.hpp' -o -name '*.cpp' -o -name "
+            "'*.h' | head -1); "
+            "if [ -z \"$src_files\" ]; then "
+            "echo 'No source files found — skipping lint'; exit 0; fi; "
+            "find packages \\( -name '*.hpp' -o -name '*.cpp' -o -name '*.h' \\) "
+            "-print0 | xargs -0 clang-format --dry-run --Werror "
+            "&& find packages \\( -name '*.hpp' -o -name '*.cpp' -o -name '*.h' \\) "
+            "-print0 | xargs -0 clang-tidy -p build",
         )
 
     def format(self) -> None:

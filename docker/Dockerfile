@@ -54,11 +54,20 @@ RUN apt-get update \
 # ---------------------------------------------------------------------------
 # Conan package manager
 # ---------------------------------------------------------------------------
-RUN python3 -m pip install --no-cache-dir --break-system-packages conan
+RUN python3 -m pip install --no-cache-dir --break-system-packages conan \
+    && conan profile detect --force
 
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
+# Source ROS2 environment for both interactive shells (docker run -it) and
+# non-interactive exec (docker exec ... bash -c).
+#
+# Ubuntu's default .bashrc returns early when PS1 is unset (non-interactive).
+# We insert the ROS2 source before that guard so bash -c also gets it.
+RUN sed -i '1i source /opt/ros/jazzy/setup.bash\n[ -f /workspace/install/setup.bash ] && source /workspace/install/setup.bash || true' /root/.bashrc
+ENV BASH_ENV=/root/.bashrc
+
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
