@@ -1,0 +1,44 @@
+---
+# clang-tidy configuration — Google-compatible.
+#
+# Enabled checks:
+#   google-*                  — the Google C++ Style Guide check suite
+#   modernize-use-override    — prefer `override` to a redundant `virtual`
+#   modernize-use-nullptr     — prefer `nullptr` to `NULL` / `0`
+#   performance-*             — performance anti-patterns
+#   readability-*             — readability and clarity improvements
+#
+# Disabled checks (noisy or conflicting with Google Style):
+#   readability-avoid-const-ptr-in-declaration   — conflicts with Google's
+#                                                  `const T*` style
+#   readability-function-size                    — stylistic, low signal
+#   readability-identifier-length                — Google Style permits short
+#                                                  loop variables (i, j, ...)
+#   readability-identifier-naming                — naming policy belongs to
+#                                                  code review, not automation
+#   readability-implicit-bool-conversion         — Google Style allows implicit
+#                                                  bool conversions
+#   readability-magic-numbers                    — numeric constants are the
+#                                                  norm in robotics code
+#   readability-non-const-parameter              — noisy; pointer params with
+#                                                  mutable pointees are common
+#   readability-qualified-auto                   — Google Style endorses
+#                                                  unqualified `auto`
+
+Checks: >-
+  google-*,
+  modernize-use-override,
+  modernize-use-nullptr,
+  performance-*,
+  readability-*,
+  -readability-avoid-const-ptr-in-declaration,
+  -readability-function-size,
+  -readability-identifier-length,
+  -readability-identifier-naming,
+  -readability-implicit-bool-conversion,
+  -readability-magic-numbers,
+  -readability-non-const-parameter,
+  -readability-qualified-auto,
+WarningsAsErrors: ''
+HeaderFilterRegex: ''
+FormatStyle: file

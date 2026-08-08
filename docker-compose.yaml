@@ -1,0 +1,51 @@
+# RosBridge Pro — development environment
+#
+# Services:
+#   ros2   — main development container: ROS 2 Jazzy + build toolchain,
+#            with the repository bind-mounted at /workspace.
+#   novnc  — browser-based VNC viewer (http://localhost:6080) for the ROS 2
+#            container's display (VNC server on ros2:5900, enabled later).
+
+services:
+  ros2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: rosbridge:dev
+    container_name: ros2
+    stdin_open: true
+    tty: true
+    # Keep the container alive for interactive development.
+    command: tail -f /dev/null
+    environment:
+      DISPLAY: ":99"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+      ROS_DOMAIN_ID: "42"
+    ports:
+      - "8080:8080" # HTTP gateway
+      - "9090:9090" # WebSocket
+      - "8765:8765" # gRPC
+    volumes:
+      # Source tree: live-reloads on the host filesystem.
+      - .:/workspace
+      # Conan package cache — persists across container recreation so
+      # dependencies (spdlog, gtest, ...) are not re-downloaded / rebuilt.
+      - conan_cache:/root/.conan2
+      # Shared memory for high-bandwidth intra-container communication
+      # (e.g. Gazebo / ROS 2 image transport).
+      - /dev/shm:/dev/shm
+
+  novnc:
+    image: theasp/novnc:latest
+    container_name: novnc
+    environment:
+      # Connects to the VNC server running inside the `ros2` container.
+      VNC_SERVER: "ros2:5900"
+    ports:
+      - "6080:6080"
+    depends_on:
+      - ros2
+
+volumes:
+  conan_cache:
+    driver: local
