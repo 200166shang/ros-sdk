@@ -55,11 +55,11 @@ pip install -r scripts/requirements.txt
 ## 仓库结构
 
 ```text
-rb                    开发 CLI 入口
+rb                    可执行的 Python 开发 CLI 入口
 docker/               Dockerfile 和容器 entrypoint
 docker-compose.yaml   本地开发服务
 scripts/              Python CLI 实现
-packages/ros2_sdk/    机器人运行时模块所在的 ROS 2 包
+src/ros2_sdk/         机器人运行时模块所在的 ROS 2 包
 ```
 
 ## 许可证

@@ -82,24 +82,24 @@ chore: update repository tooling
 | Docker 或依赖环境 | `./rb docker build-image`，然后执行受影响的 build/test 流程 |
 | ROS 2 运行时行为 | 单元测试，以及对应容器或 Gazebo 集成场景 |
 
-`./rb format` 会修改 `packages/` 下所有匹配的 C++ 文件。如果工作区存在无关 C++ 修改，
+`./rb format` 会修改 `src/` 下所有匹配的 C++ 文件。如果工作区存在无关 C++ 修改，
 不要运行全量格式化，应只格式化本次任务涉及的文件。
 
 ## 代码与包规范
 
 - 使用 C++17、Google C++ Style、`.clang-format` 和 100 列限制。
 - 静态分析使用 `.clang-tidy` 中的 Google、modernize、performance 和选定 readability 检查。
-- 公共头文件放在 `packages/ros2_sdk/include/ros2_sdk/`，使用
+- 公共头文件放在 `src/ros2_sdk/include/ros2_sdk/`，使用
   `<ros2_sdk/xxx.hpp>` 方式引用。
-- 实现放在 `packages/ros2_sdk/src/`，gtest 测试放在 `packages/ros2_sdk/test/`。
+- 实现放在 `src/ros2_sdk/src/`，gtest 测试放在 `src/ros2_sdk/test/`。
 - 公共 API 需要 Doxygen 文档和面向行为的测试。
-- ROS 2 依赖声明在 `packages/ros2_sdk/package.xml` 和 CMake；非 ROS C++ 依赖声明在
+- ROS 2 依赖声明在 `src/ros2_sdk/package.xml` 和 CMake；非 ROS C++ 依赖声明在
   `conanfile.txt`。
 - 模块能够独立安装且拥有不同消费者之前，继续保留在单一 `ros2_sdk` 包中；未来新包作为
-  `packages/` 下的同级目录。
+  `src/` 下的同级目录。
 
 ```text
-packages/ros2_sdk/     机器人运行时模块所在的单一 ROS 2 包
+src/ros2_sdk/          机器人运行时模块所在的单一 ROS 2 包
   include/ros2_sdk/    公共头文件
   src/                 C++ 实现
   test/                gtest 测试
@@ -127,7 +127,7 @@ Runtime 代码开始实现后，优先检查以下正确性和安全约束：
   `docs/superpowers/` 和 `docs/feishu/` 的规则，除非用户明确改变该策略。
 - 添加生产依赖、修改 Dockerfile apt 包或改变 `colcon` 构建参数前必须询问。
 - 保留已有和未跟踪的用户修改；除非明确属于当前任务，不要清理、覆盖、暂存或提交。
-- 阅读文件、修改任务范围内的 `packages/` 源码，以及运行 `./rb build/test/lint` 属于正常
+- 阅读文件、修改任务范围内的 `src/` 源码，以及运行 `./rb build/test/lint` 属于正常
   开发操作。
 
 ## 文档路由

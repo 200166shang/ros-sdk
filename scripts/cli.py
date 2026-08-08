@@ -35,5 +35,5 @@ def shell() -> None:
 
 @main.command()
 def ci() -> None:
-    """Run the full CI pipeline: lint → build → test."""
+    """Run the full CI pipeline: build → lint → test."""
     WorkspaceManager().ci()
