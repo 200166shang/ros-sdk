@@ -9,10 +9,9 @@
 services:
   ros2:
     build:
-      # Context is the repository root (this file lives at the repo root).
       context: .
       dockerfile: docker/Dockerfile
-    image: rosbridge-pro:dev
+    image: rosbridge:dev
     container_name: ros2
     stdin_open: true
     tty: true
