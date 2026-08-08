@@ -28,6 +28,9 @@ services:
     volumes:
       # Source tree: live-reloads on the host filesystem.
       - .:/workspace
+      # Conan package cache — persists across container recreation so
+      # dependencies (spdlog, gtest, ...) are not re-downloaded / rebuilt.
+      - conan_cache:/root/.conan2
       # Shared memory for high-bandwidth intra-container communication
       # (e.g. Gazebo / ROS 2 image transport).
       - /dev/shm:/dev/shm
@@ -42,3 +45,7 @@ services:
       - "6080:6080"
     depends_on:
       - ros2
+
+volumes:
+  conan_cache:
+    driver: local
