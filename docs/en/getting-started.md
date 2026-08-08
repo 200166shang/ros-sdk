@@ -20,8 +20,8 @@ cd ros-sdk
 Build the image and start the containers:
 
 ```bash
-docker compose -f docker/compose.yaml build
-docker compose -f docker/compose.yaml up -d
+./rb docker build-image
+./rb docker up
 ```
 
 Point a browser at <http://localhost:6080> to open the VNC viewer and watch
@@ -29,34 +29,28 @@ the container's display.
 
 ## Build the Workspace
 
-Enter the container and build with colcon:
+Build the workspace with Conan and colcon:
 
 ```bash
-docker compose -f docker/compose.yaml exec ros2 bash
-
-# inside the container
-cd /workspace
-conan install . --output-folder=build/conan   # fetch C++ dependencies (Conan)
-colcon build
+./rb build
 ```
 
 ## Run the Tests
 
 ```bash
-# inside the container
-colcon test --event-handlers console_cohesion+
+./rb test
 ```
 
 ## Useful Commands
 
 ```bash
 # stop the environment
-docker compose -f docker/compose.yaml down
+./rb docker down
 
 # rebuild the image after Dockerfile changes
-docker compose -f docker/compose.yaml build
+./rb docker build-image
 ```
 
 ## Next Steps
 
-- [Repository overview](../README.md)
+- [Repository overview](../../README.md)

@@ -19,42 +19,36 @@ cd ros-sdk
 构建镜像并启动容器：
 
 ```bash
-docker compose -f docker/compose.yaml build
-docker compose -f docker/compose.yaml up -d
+./rb docker build-image
+./rb docker up
 ```
 
 用浏览器打开 <http://localhost:6080> 的 VNC 查看器，即可观察容器内的显示画面。
 
 ## 编译工作空间
 
-进入容器并使用 colcon 编译：
+使用 Conan 和 colcon 编译工作空间：
 
 ```bash
-docker compose -f docker/compose.yaml exec ros2 bash
-
-# 容器内
-cd /workspace
-conan install . --output-folder=build/conan   # 拉取 C++ 依赖（Conan）
-colcon build
+./rb build
 ```
 
 ## 运行测试
 
 ```bash
-# 容器内
-colcon test --event-handlers console_cohesion+
+./rb test
 ```
 
 ## 常用命令
 
 ```bash
 # 停止环境
-docker compose -f docker/compose.yaml down
+./rb docker down
 
 # Dockerfile 变更后重新构建镜像
-docker compose -f docker/compose.yaml build
+./rb docker build-image
 ```
 
 ## 下一步
 
-- [仓库总览](../README.md)
+- [仓库总览](../../README.md)
