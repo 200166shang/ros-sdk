@@ -44,4 +44,3 @@ endif()
 
 # --- Packages ------------------------------------------------------------------
 add_subdirectory(packages/ros2_sdk)
-add_subdirectory(packages/infra)
