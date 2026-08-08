@@ -15,7 +15,7 @@ A C++ robot runtime framework that manages ROS2 module lifecycle, monitors healt
 | Language    | C++17                               |
 | Middleware  | ROS 2 Jazzy (Joints)                |
 | Build       | CMake + colcon + Conan              |
-| Containers  | Docker / docker compose             |
+| Containers  | Docker / docker-compose             |
 | License     | Apache 2.0                          |
 
 ## Quick Start
@@ -25,17 +25,22 @@ A C++ robot runtime framework that manages ROS2 module lifecycle, monitors healt
 The development environment is Docker-based. Once the image is built:
 
 ```bash
-docker compose -f docker/compose.yaml up -d
-docker compose -f docker/compose.yaml exec ros2 bash
+# macOS users: use docker-compose (hyphenated) or Docker Desktop
+docker-compose up -d
+docker-compose exec ros2 bash
+
+# Linux users with Docker Compose plugin:
+docker compose up -d
+docker compose exec ros2 bash
 ```
 
-See [Getting Started](docs/en/getting-started.md) for the full guide.
+For the full development setup guide, see the project documentation in `docs/`.
 
 ## Repository Layout
 
 ```
-docker/               Development environment (Dockerfile, compose, entrypoint)
-docs/                 Documentation (English and Chinese)
+docker/               Dockerfile and entrypoint
+docs/                 Documentation
 packages/ros2_sdk/    ROS2-facing modules (lifecycle, health, recovery)
 packages/infra/       Infrastructure primitives (logging, utilities)
 ```
