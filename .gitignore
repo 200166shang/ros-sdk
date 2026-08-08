@@ -1,0 +1,23 @@
+# Build
+build/
+install/
+log/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+
+# Conan
+conan_cache/
+
+# Internal planning docs — user-facing docs (API, README) are committed
+docs/prd.md
+docs/landscape-analysis.md
+docs/feishu/
+docs/superpowers/
