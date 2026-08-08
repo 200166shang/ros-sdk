@@ -20,18 +20,24 @@ A C++ robot runtime framework that manages ROS2 module lifecycle, monitors healt
 
 ## Quick Start
 
-> Placeholder — the development environment is being set up. Full setup instructions will land with the Phase 1 build pipeline.
-
-The development environment is Docker-based. Once the image is built:
-
 ```bash
-# macOS users: use docker-compose (hyphenated) or Docker Desktop
-docker-compose up -d
-docker-compose exec ros2 bash
+# 1. Install Python CLI dependencies (once)
+pip install -r scripts/requirements.txt
 
-# Linux users with Docker Compose plugin:
-docker compose up -d
-docker compose exec ros2 bash
+# 2. Build the Docker image (once, or when Dockerfile changes)
+./rb docker build-image
+
+# 3. Start the development environment
+./rb up
+
+# 4. Build the project
+./rb build
+
+# 5. Open a shell inside the container
+./rb shell
+
+# 6. Stop when done
+./rb down
 ```
 
 For the full development setup guide, see the project documentation in `docs/`.
@@ -39,7 +45,9 @@ For the full development setup guide, see the project documentation in `docs/`.
 ## Repository Layout
 
 ```
+rb                    Development CLI entry point
 docker/               Dockerfile and entrypoint
+scripts/              CLI implementation (Python, click-based)
 docs/                 Documentation
 packages/ros2_sdk/    ROS2-facing modules (lifecycle, health, recovery)
 packages/infra/       Infrastructure primitives (logging, utilities)
