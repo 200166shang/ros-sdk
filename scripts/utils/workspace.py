@@ -27,15 +27,16 @@ class WorkspaceManager:
             "-s build_type=Release "
             "-s compiler.cppstd=17 "
             "&& . build/conanbuild.sh "
-            "&& colcon build --symlink-install",
+            "&& colcon build --base-paths src --symlink-install "
+            "--cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
         )
 
     def test(self, filter_pattern: str | None = None) -> None:
         """Run colcon test, optionally filtering test names."""
-        cmd = "colcon test"
+        cmd = "colcon test --base-paths src"
         if filter_pattern:
             cmd += f" --ctest-args -R '{filter_pattern}'"
-        self._docker.exec("bash", "-c", cmd)
+        self._docker.exec("bash", "-c", f"{cmd} && colcon test-result --verbose")
 
     # -- lint ----------------------------------------------------------------
 
@@ -43,31 +44,38 @@ class WorkspaceManager:
         """Run clang-format (dry-run) and clang-tidy."""
         self._docker.exec(
             "bash", "-c",
-            "src_files=$(find packages -name '*.hpp' -o -name '*.cpp' -o -name "
-            "'*.h' | head -1); "
+            "src_files=$(find src -type f \\( -name '*.hpp' -o -name '*.cpp' -o -name "
+            "'*.h' \\) -print -quit); "
             "if [ -z \"$src_files\" ]; then "
-            "echo 'No source files found — skipping lint'; exit 0; fi; "
-            "find packages \\( -name '*.hpp' -o -name '*.cpp' -o -name '*.h' \\) "
+            "echo 'No C++ source files found — skipping lint'; exit 0; fi; "
+            "find src -type f \\( -name '*.hpp' -o -name '*.cpp' -o -name '*.h' \\) "
             "-print0 | xargs -0 clang-format --dry-run --Werror "
-            "&& find packages \\( -name '*.hpp' -o -name '*.cpp' -o -name '*.h' \\) "
-            "-print0 | xargs -0 clang-tidy -p build",
+            "&& compile_db=$(find build -name compile_commands.json -print -quit); "
+            "if [ -z \"$compile_db\" ]; then "
+            "echo 'No compile_commands.json found — run ./rb build first'; exit 1; fi; "
+            "find src -type f \\( -name '*.hpp' -o -name '*.cpp' -o -name '*.h' \\) "
+            "-print0 | xargs -0 clang-tidy -p \"$(dirname \"$compile_db\")\"",
         )
 
     def format(self) -> None:
         """Apply clang-format in-place."""
         self._docker.exec(
             "bash", "-c",
-            "find packages -name '*.hpp' -o -name '*.cpp' "
-            "| xargs clang-format -i",
+            "src_files=$(find src -type f \\( -name '*.hpp' -o -name '*.cpp' -o -name "
+            "'*.h' \\) -print -quit); "
+            "if [ -z \"$src_files\" ]; then "
+            "echo 'No C++ source files found — skipping format'; exit 0; fi; "
+            "find src -type f \\( -name '*.hpp' -o -name '*.cpp' -o -name '*.h' \\) "
+            "-print0 | xargs -0 clang-format -i",
         )
 
     # -- ci ------------------------------------------------------------------
 
     def ci(self) -> None:
-        """Run the full CI pipeline: lint → build → test."""
+        """Run the full CI pipeline: build → lint → test."""
         stages = [
-            ("Lint", self.lint),
             ("Build", self.build),
+            ("Lint", self.lint),
             ("Test", self.test),
         ]
         for name, stage in stages:
