@@ -9,8 +9,10 @@
 services:
   ros2:
     build:
-      context: .
-      dockerfile: Dockerfile
+      # Context is the repository root (this file lives in docker/).
+      context: ..
+      # Relative to the build context.
+      dockerfile: docker/Dockerfile
     image: rosbridge-pro:dev
     container_name: ros2
     stdin_open: true
@@ -26,8 +28,9 @@ services:
       - "9090:9090" # WebSocket
       - "8765:8765" # gRPC
     volumes:
-      # Source tree: live-reloads on the host filesystem.
-      - .:/workspace
+      # Source tree: live-reloads on the host filesystem (repo root, one
+      # level up from this compose file).
+      - ../:/workspace
       # Shared memory for high-bandwidth intra-container communication
       # (e.g. Gazebo / ROS 2 image transport).
       - /dev/shm:/dev/shm

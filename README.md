@@ -25,13 +25,17 @@ A C++ robot runtime framework that manages ROS2 module lifecycle, monitors healt
 The development environment is Docker-based. Once the image is built:
 
 ```bash
-docker compose up -d
-docker compose exec ros2 bash
+docker compose -f docker/compose.yaml up -d
+docker compose -f docker/compose.yaml exec ros2 bash
 ```
+
+See [Getting Started](docs/en/getting-started.md) for the full guide.
 
 ## Repository Layout
 
 ```
+docker/               Development environment (Dockerfile, compose, entrypoint)
+docs/                 Documentation (English and Chinese)
 packages/ros2_sdk/    ROS2-facing modules (lifecycle, health, recovery)
 packages/infra/       Infrastructure primitives (logging, utilities)
 ```
