@@ -1,0 +1,13 @@
+# RosBridge Pro — Conan dependencies
+#
+# Phase 1: only the minimum needed for the foundation — structured logging,
+# JSON support, and unit testing.
+
+[requires]
+spdlog/1.14.1        # Structured logging
+nlohmann-json/3.11.3 # JSON — structured log payloads and configuration
+gtest/1.14.0         # Unit testing
+
+[generators]
+CMakeDeps
+CMakeToolchain
