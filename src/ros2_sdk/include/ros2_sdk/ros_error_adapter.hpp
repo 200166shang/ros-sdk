@@ -8,13 +8,7 @@
 
 namespace ros2_sdk {
 
-/**
- * @brief Converts a common ROS 2 return code to the RosBridge error model.
- *
- * Return codes not represented by the initial RosBridge catalog map to
- * ErrorCode::kUnknown while preserving the original ROS return code at the
- * call site if it is needed for lower-level diagnostics.
- */
+// error_code_from_rcl maps a ROS 2 return code to the RosBridge error model.
 constexpr ErrorCode error_code_from_rcl(rcl_ret_t ret) noexcept {
   switch (ret) {
     case RCL_RET_OK:
@@ -30,16 +24,12 @@ constexpr ErrorCode error_code_from_rcl(rcl_ret_t ret) noexcept {
   }
 }
 
-/**
- * @brief Converts a ROS 2 return code and message to an Error.
- */
+// error_from_rcl converts a ROS 2 return code and message to an Error.
 inline Error error_from_rcl(rcl_ret_t ret, std::string message) {
   return Error(error_code_from_rcl(ret), std::move(message));
 }
 
-/**
- * @brief Converts an rclcpp exception's code and message to an Error.
- */
+// error_from_rcl converts an rclcpp exception to an Error.
 inline Error error_from_rcl(const rclcpp::exceptions::RCLErrorBase& error) {
   return Error(error_code_from_rcl(error.ret), error.message);
 }

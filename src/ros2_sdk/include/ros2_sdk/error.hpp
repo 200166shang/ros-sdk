@@ -8,48 +8,34 @@
 
 namespace ros2_sdk {
 
-/**
- * @brief Stable machine-readable result and error identifiers.
- *
- * Numeric values are part of the public API. Once published, a value must not
- * be reused for a different meaning.
- */
+// ErrorCode provides stable machine-readable result and error identifiers.
 enum class ErrorCode : std::uint32_t {  // NOLINT(performance-enum-size)
   kOk = 0,
   kUnknown = 1,
 
-  // 1000-1999: Core.
+  // ErrorCode Core range.
   kInvalidArgument = 1001,
   kNotInitialized = 1002,
 
-  // 2000-2999: Communication.
+  // ErrorCode Communication range.
   kCommunicationTimeout = 2001,
   kServiceUnavailable = 2002,
 
-  // 3000-3999: Lifecycle.
+  // ErrorCode Lifecycle range.
   kModuleStartFailed = 3001,
 };
 
-/**
- * @brief Returns the stable numeric value of an error code.
- */
+// error_code_value returns the stable numeric value of an error code.
 constexpr std::uint32_t error_code_value(ErrorCode code) noexcept {
   return static_cast<std::uint32_t>(code);
 }
 
-/**
- * @brief Returns whether an error code represents success.
- */
+// is_success reports whether an error code represents success.
 constexpr bool is_success(ErrorCode code) noexcept {
   return code == ErrorCode::kOk;
 }
 
-/**
- * @brief Returns the stable display name of an error code.
- *
- * Unknown numeric values are preserved by ErrorCode and are represented by
- * "UNKNOWN" when converted to a name.
- */
+// error_code_name returns the stable display name of an error code.
 constexpr std::string_view error_code_name(ErrorCode code) noexcept {
   switch (code) {
     case ErrorCode::kOk:
@@ -71,32 +57,19 @@ constexpr std::string_view error_code_name(ErrorCode code) noexcept {
   }
 }
 
-/**
- * @brief A value object containing an error code and human-readable detail.
- *
- * Error is intended for normal, non-real-time paths. It owns its message so
- * that the error can safely outlive the operation that produced it.
- */
+// Error stores an error code and human-readable detail for normal paths.
 class Error {
 public:
-  /**
-   * @brief Constructs an error with its code and explanatory message.
-   */
+  // Error constructs an error with its code and message.
   Error(ErrorCode code, std::string message) : code_(code), message_(std::move(message)) {}
 
-  /**
-   * @brief Returns the machine-readable error code.
-   */
+  // code returns the machine-readable error code.
   ErrorCode code() const noexcept { return code_; }
 
-  /**
-   * @brief Returns the human-readable error message.
-   */
+  // message returns the human-readable error message.
   const std::string& message() const noexcept { return message_; }
 
-  /**
-   * @brief Returns a stable human-readable representation.
-   */
+  // to_string returns a stable human-readable representation.
   std::string to_string() const {
     std::string result(error_code_name(code_));
     if (!message_.empty()) {
