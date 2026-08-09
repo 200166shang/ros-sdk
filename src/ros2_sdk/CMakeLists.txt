@@ -50,6 +50,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_error_model test/test_error_model.cpp)
   target_link_libraries(test_error_model ${PROJECT_NAME})
+
+  ament_add_gtest(test_result test/test_result.cpp)
+  target_link_libraries(test_result ${PROJECT_NAME})
 endif()
 
 ament_package()
