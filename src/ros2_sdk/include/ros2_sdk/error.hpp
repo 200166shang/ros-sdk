@@ -60,16 +60,12 @@ constexpr std::string_view error_code_name(ErrorCode code) noexcept {
 // Error stores an error code and human-readable detail for normal paths.
 class Error {
 public:
-  // Error constructs an error with its code and message.
   Error(ErrorCode code, std::string message) : code_(code), message_(std::move(message)) {}
 
-  // code returns the machine-readable error code.
   ErrorCode code() const noexcept { return code_; }
 
-  // message returns the human-readable error message.
   const std::string& message() const noexcept { return message_; }
 
-  // to_string returns a stable human-readable representation.
   std::string to_string() const {
     std::string result(error_code_name(code_));
     if (!message_.empty()) {
