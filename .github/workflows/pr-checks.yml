@@ -83,6 +83,7 @@ jobs:
             fi
             DOCKER_BUILDKIT=1 docker build "${build_args[@]}" \
               --file docker/Dockerfile \
+              --target ci \
               --tag "$LOCAL_CI_IMAGE" .
             echo "ROSBRIDGE_IMAGE=$LOCAL_CI_IMAGE" >> "$GITHUB_ENV"
           else
