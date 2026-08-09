@@ -94,9 +94,9 @@ jobs:
         run: |
           set -euo pipefail
           if docker compose version >/dev/null 2>&1; then
-            docker compose up --detach ros2
+            docker compose --project-name rosbridge up --detach ros2
           else
-            docker-compose up --detach ros2
+            docker-compose --project-name rosbridge up --detach ros2
           fi
 
       - name: Run the repository CI workflow
@@ -116,7 +116,7 @@ jobs:
         shell: bash
         run: |
           if docker compose version >/dev/null 2>&1; then
-            docker compose down --remove-orphans
+            docker compose --project-name rosbridge down --remove-orphans
           else
-            docker-compose down --remove-orphans
+            docker-compose --project-name rosbridge down --remove-orphans
           fi
