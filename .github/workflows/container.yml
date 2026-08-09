@@ -1,0 +1,99 @@
+name: CI Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docker/**
+      - docker-compose.yaml
+      - conanfile.txt
+      - src/ros2_sdk/package.xml
+      - src/ros2_sdk/CMakeLists.txt
+  schedule:
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ci-image-main
+  cancel-in-progress: false
+
+env:
+  CI_IMAGE: ghcr.io/200166shang/ros-sdk:ci-main
+  CANDIDATE_IMAGE: rosbridge:ci-candidate
+
+jobs:
+  build-validate-publish:
+    name: Build, validate, and publish CI image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build candidate image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          load: true
+          push: false
+          tags: ${{ env.CANDIDATE_IMAGE }}
+          cache-from: type=registry,ref=${{ env.CI_IMAGE }}
+          cache-to: type=inline
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Start the candidate ROS 2 service
+        env:
+          ROSBRIDGE_IMAGE: ${{ env.CANDIDATE_IMAGE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if docker compose version >/dev/null 2>&1; then
+            docker compose up --detach ros2
+          else
+            docker-compose up --detach ros2
+          fi
+
+      - name: Run the repository CI workflow
+        env:
+          ROSBRIDGE_IMAGE: ${{ env.CANDIDATE_IMAGE }}
+        run: ./rb ci
+
+      - name: Upload colcon logs after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-image-logs
+          path: log/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop the candidate ROS 2 service
+        if: always()
+        shell: bash
+        run: |
+          if docker compose version >/dev/null 2>&1; then
+            docker compose down --remove-orphans
+          else
+            docker-compose down --remove-orphans
+          fi
+
+      - name: Publish the validated ci-main image
+        run: |
+          set -euo pipefail
+          docker tag "$CANDIDATE_IMAGE" "$CI_IMAGE"
+          docker push "$CI_IMAGE"

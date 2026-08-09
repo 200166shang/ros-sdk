@@ -1,0 +1,122 @@
+name: PR Checks
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CI_IMAGE: ghcr.io/200166shang/ros-sdk:ci-main
+  LOCAL_CI_IMAGE: rosbridge:pr-ci
+
+jobs:
+  changes:
+    name: Detect environment changes
+    runs-on: ubuntu-latest
+    outputs:
+      environment_changed: ${{ steps.detect.outputs.environment_changed }}
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect environment changes
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          printf '%s\n' "$changed_files"
+
+          if printf '%s\n' "$changed_files" | grep -Eq \
+            '^(Dockerfile|docker/|docker-compose\.yaml$|conanfile\.txt$|src/ros2_sdk/(package\.xml|CMakeLists\.txt)$)'; then
+            echo "environment_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "environment_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  ci:
+    name: Build, lint, and test
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Log in to GHCR for the reusable CI image
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare CI image
+        env:
+          ENVIRONMENT_CHANGED: ${{ needs.changes.outputs.environment_changed }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cache_available=false
+          if docker pull "$CI_IMAGE"; then
+            cache_available=true
+          fi
+
+          if [ "$ENVIRONMENT_CHANGED" = "true" ] || [ "$cache_available" = "false" ]; then
+            build_args=(--build-arg BUILDKIT_INLINE_CACHE=1)
+            if [ "$cache_available" = "true" ]; then
+              build_args+=(--cache-from "$CI_IMAGE")
+            fi
+            DOCKER_BUILDKIT=1 docker build "${build_args[@]}" \
+              --file docker/Dockerfile \
+              --tag "$LOCAL_CI_IMAGE" .
+            echo "ROSBRIDGE_IMAGE=$LOCAL_CI_IMAGE" >> "$GITHUB_ENV"
+          else
+            echo "ROSBRIDGE_IMAGE=$CI_IMAGE" >> "$GITHUB_ENV"
+          fi
+
+      - name: Start the ROS 2 service
+        shell: bash
+        run: |
+          set -euo pipefail
+          if docker compose version >/dev/null 2>&1; then
+            docker compose up --detach ros2
+          else
+            docker-compose up --detach ros2
+          fi
+
+      - name: Run the repository CI workflow
+        run: ./rb ci
+
+      - name: Upload colcon logs after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-ci-logs
+          path: log/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop the ROS 2 service
+        if: always()
+        shell: bash
+        run: |
+          if docker compose version >/dev/null 2>&1; then
+            docker compose down --remove-orphans
+          else
+            docker-compose down --remove-orphans
+          fi

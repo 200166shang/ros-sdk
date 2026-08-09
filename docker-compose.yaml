@@ -11,7 +11,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: rosbridge:dev
+    image: ${ROSBRIDGE_IMAGE:-rosbridge:dev}
     container_name: ros2
     stdin_open: true
     tty: true

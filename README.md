@@ -52,6 +52,13 @@ pip install -r scripts/requirements.txt
 
 运行 `./rb --help` 可以查看完整开发命令。
 
+## CI
+
+每个 Pull Request 都会在 Docker 环境中执行 Build、Lint 和 Test。普通源码变更复用
+GHCR 中最新的 `ci-main` 镜像；Dockerfile、Conan 或 ROS 依赖变更会在当前 PR 中构建临时
+镜像进行验证。环境变更合入 `main` 并通过验证后，GitHub Actions 会更新
+`ghcr.io/200166shang/ros-sdk:ci-main`。项目不保存每个 PR 或 commit 的临时镜像。
+
 ## 仓库结构
 
 ```text
