@@ -1,16 +1,17 @@
 # =============================================================================
-# RosBridge Pro — development image
+# RosBridge Pro — development and CI images
 #
-#   Single-stage build on ros:jazzy-ros-core to keep image size manageable
-#   and avoid keeping intermediate stage images that exhaust Colima disk space.
+#   The shared base contains the compiler, ROS project dependencies, and
+#   analysis tools needed by ./rb ci. The ci target stops there, while the dev
+#   target adds Gazebo and TurtleBot3 tooling for local simulation.
 #
-#   rosdep packages are installed together so the layer stays cache-reusable
-#   across source-only rebuilds.
+#   Keep dependency installation grouped so the layer stays reusable across
+#   source-only rebuilds.
 # =============================================================================
 
 ARG ROS_DISTRO=jazzy
 
-FROM ros:${ROS_DISTRO}-ros-core
+FROM ros:${ROS_DISTRO}-ros-core AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG ROS_DISTRO
@@ -23,10 +24,10 @@ ENV TURTLEBOT3_MODEL=burger
 ENV WORKSPACE=/workspace
 
 # ---------------------------------------------------------------------------
-# System + ROS2 + Gazebo + TurtleBot3 — single RUN to keep one layer
+# System + ROS 2 build/test toolchain — shared by ci and dev
 #
-# rosdep init/update runs here so future source changes don't invalidate
-# the apt cache layer above.
+# rosdep init/update runs here so future source changes don't invalidate this
+# environment layer.
 # ---------------------------------------------------------------------------
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -38,15 +39,15 @@ RUN apt-get update \
         python3-colcon-common-extensions \
         python3-pip \
         python3-rosdep \
+        ros-${ROS_DISTRO}-ament-cmake-gtest \
+        ros-${ROS_DISTRO}-geometry-msgs \
+        ros-${ROS_DISTRO}-nav-msgs \
+        ros-${ROS_DISTRO}-rclcpp \
         ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
-        ros-${ROS_DISTRO}-ros-gz \
-        ros-${ROS_DISTRO}-turtlebot3 \
-        ros-${ROS_DISTRO}-turtlebot3-bringup \
-        ros-${ROS_DISTRO}-turtlebot3-description \
-        ros-${ROS_DISTRO}-turtlebot3-gazebo \
-        ros-${ROS_DISTRO}-turtlebot3-simulations \
-        ros-${ROS_DISTRO}-turtlebot3-teleop \
-        xvfb \
+        ros-${ROS_DISTRO}-sensor-msgs \
+        ros-${ROS_DISTRO}-std-msgs \
+        ros-${ROS_DISTRO}-tf2 \
+        ros-${ROS_DISTRO}-tf2-geometry-msgs \
     && rm -rf /var/lib/apt/lists/* \
     && rosdep init 2>/dev/null || true \
     && rosdep update
@@ -74,3 +75,25 @@ ENTRYPOINT ["/entrypoint.sh"]
 
 WORKDIR ${WORKSPACE}
 CMD ["tail", "-f", "/dev/null"]
+
+# ---------------------------------------------------------------------------
+# Minimal GitHub Actions validation image
+# ---------------------------------------------------------------------------
+FROM base AS ci
+
+# ---------------------------------------------------------------------------
+# Full local development and simulation image
+# ---------------------------------------------------------------------------
+FROM base AS dev
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ros-${ROS_DISTRO}-ros-gz \
+        ros-${ROS_DISTRO}-turtlebot3 \
+        ros-${ROS_DISTRO}-turtlebot3-bringup \
+        ros-${ROS_DISTRO}-turtlebot3-description \
+        ros-${ROS_DISTRO}-turtlebot3-gazebo \
+        ros-${ROS_DISTRO}-turtlebot3-simulations \
+        ros-${ROS_DISTRO}-turtlebot3-teleop \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
