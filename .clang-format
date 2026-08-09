@@ -23,7 +23,6 @@ AlignOperands: Align
 AlignTrailingComments: true
 AllowAllArgumentsOnNextLine: true
 AllowAllParametersOfDeclarationOnNextLine: true
-AllowBreakBeforeNoReturnStatement: Never
 AllowShortBlocksOnASingleLine: Never
 AllowShortCaseLabelsOnASingleLine: false
 AllowShortEnumsOnASingleLine: true
@@ -40,7 +39,6 @@ AttributeMacros:
 BinPackArguments: true
 BinPackParameters: true
 BitFieldColonSpacing: Both
-BracedInitStyle: After
 BreakAfterAttributes: Never
 BreakAfterJavaFieldAnnotations: false
 BreakBeforeBinaryOperators: None
@@ -57,7 +55,6 @@ CompactNamespaces: false
 ConstructorInitializerIndentWidth: 4
 ContinuationIndentWidth: 4
 Cpp11BracedListStyle: true
-DeriveLineEnding: true
 DerivePointerAlignment: false
 DisableFormat: false
 EmptyLineAfterAccessModifier: Never
@@ -96,15 +93,19 @@ IndentCaseLabels: true
 IndentExternBlock: AfterExternBlock
 IndentGotoLabels: true
 IndentPPDirectives: None
-IndentRequires: false
 IndentWidth: 2
 IndentWrappedFunctionNames: false
 InsertBraces: false
 InsertNewlineAtEOF: true
 InsertTrailingCommas: None
-IntegerLiteralSeparator: 0
+IntegerLiteralSeparator:
+  Binary: 0
+  BinaryMinDigits: 0
+  Decimal: 0
+  DecimalMinDigits: 0
+  Hex: 0
+  HexMinDigits: 0
 JavaScriptQuotes: Leave
-JavaScriptWrapLines: true
 KeepEmptyLinesAtTheStartOfBlocks: false
 LambdaBodyIndentation: Signature
 LineEnding: DeriveLF
@@ -158,21 +159,14 @@ SpaceBeforeParensOptions:
   AfterOverloadedOperator: false
   AfterRequiresInClause: false
   AfterRequiresInExpression: false
-BeforeCatch: false
-BeforeElse: false
-BeforeLambdaBody: false
-BeforeWhile: false
 SpaceBeforeRangeBasedForLoopColon: true
 SpaceInEmptyBlock: false
-SpaceInEmptyParentheses: false
 SpacesBeforeTrailingComments: 2
 SpacesInAngles: Never
-SpacesInConditionalStatement: false
 SpacesInContainerLiterals: true
 SpacesInLineCommentPrefix:
   Minimum: 1
   Maximum: -1
-SpacesInParentheses: false
 SpacesInSquareBrackets: false
 Standard: c++17
 StatementAttributeLikeMacros:
