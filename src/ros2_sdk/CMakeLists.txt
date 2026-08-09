@@ -47,6 +47,9 @@ ament_export_dependencies(
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_error_model test/test_error_model.cpp)
+  target_link_libraries(test_error_model ${PROJECT_NAME})
 endif()
 
 ament_package()
