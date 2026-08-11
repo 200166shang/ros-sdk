@@ -14,6 +14,7 @@ TEST(ErrorCodeTest, ExposesStableValuesAndNames) {
   EXPECT_EQ(error_code_value(ErrorCode::kCommunicationTimeout), 2001U);
   EXPECT_EQ(error_code_value(ErrorCode::kServiceUnavailable), 2002U);
   EXPECT_EQ(error_code_value(ErrorCode::kModuleStartFailed), 3001U);
+  EXPECT_EQ(error_code_value(ErrorCode::kLoggingInitializationFailed), 4001U);
 
   EXPECT_EQ(error_code_name(ErrorCode::kOk), "OK");
   EXPECT_EQ(error_code_name(ErrorCode::kUnknown), "UNKNOWN");
@@ -22,6 +23,8 @@ TEST(ErrorCodeTest, ExposesStableValuesAndNames) {
   EXPECT_EQ(error_code_name(ErrorCode::kCommunicationTimeout), "COMMUNICATION_TIMEOUT");
   EXPECT_EQ(error_code_name(ErrorCode::kServiceUnavailable), "SERVICE_UNAVAILABLE");
   EXPECT_EQ(error_code_name(ErrorCode::kModuleStartFailed), "MODULE_START_FAILED");
+  EXPECT_EQ(error_code_name(ErrorCode::kLoggingInitializationFailed),
+            "LOGGING_INITIALIZATION_FAILED");
 }
 
 TEST(ErrorCodeTest, PreservesUnknownValues) {

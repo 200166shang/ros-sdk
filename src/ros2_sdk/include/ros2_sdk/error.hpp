@@ -23,6 +23,9 @@ enum class ErrorCode : std::uint32_t {  // NOLINT(performance-enum-size)
 
   // ErrorCode Lifecycle range.
   kModuleStartFailed = 3001,
+
+  // ErrorCode Observability range.
+  kLoggingInitializationFailed = 4001,
 };
 
 // error_code_value returns the stable numeric value of an error code.
@@ -52,6 +55,8 @@ constexpr std::string_view error_code_name(ErrorCode code) noexcept {
       return "SERVICE_UNAVAILABLE";
     case ErrorCode::kModuleStartFailed:
       return "MODULE_START_FAILED";
+    case ErrorCode::kLoggingInitializationFailed:
+      return "LOGGING_INITIALIZATION_FAILED";
     default:
       return "UNKNOWN";
   }
