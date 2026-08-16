@@ -41,7 +41,7 @@ jobs:
           printf '%s\n' "$changed_files"
 
           if printf '%s\n' "$changed_files" | grep -Eq \
-            '^(Dockerfile|docker/|docker-compose\.yaml$|conanfile\.txt$|src/ros2_sdk/(package\.xml|CMakeLists\.txt)$)'; then
+            '^(Dockerfile|docker/|docker-compose\.yaml$|conanfile\.txt$|conan\.lock$|src/ros2_sdk/(package\.xml|CMakeLists\.txt)$)'; then
             echo "environment_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "environment_changed=false" >> "$GITHUB_OUTPUT"

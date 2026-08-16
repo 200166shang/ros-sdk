@@ -55,7 +55,7 @@ RUN apt-get update \
 # ---------------------------------------------------------------------------
 # Conan package manager
 # ---------------------------------------------------------------------------
-RUN python3 -m pip install --no-cache-dir --break-system-packages conan \
+RUN python3 -m pip install --no-cache-dir --break-system-packages conan==2.31.2 \
     && conan profile detect --force
 
 # ---------------------------------------------------------------------------

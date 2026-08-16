@@ -48,11 +48,47 @@ ament_export_dependencies(
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
+  # Conan's protobuf build tool is versioned (for example, protoc-33.5.0),
+  # while the ROS image may also provide an older system protoc. Resolve the
+  # executable from the Conan package before FindProtobuf creates the target.
+  find_file(
+    ros2_sdk_protobuf_codegen_helper
+    NAMES protobuf-conan-protoc-target.cmake
+    PATHS ${CMAKE_PREFIX_PATH}
+    PATH_SUFFIXES lib/cmake/protobuf
+    NO_DEFAULT_PATH)
+  if(ros2_sdk_protobuf_codegen_helper)
+    get_filename_component(ros2_sdk_protobuf_cmake_dir
+                           "${ros2_sdk_protobuf_codegen_helper}" DIRECTORY)
+    get_filename_component(ros2_sdk_protobuf_package_dir
+                           "${ros2_sdk_protobuf_cmake_dir}/../../.." ABSOLUTE)
+    file(GLOB ros2_sdk_protoc_candidates
+         "${ros2_sdk_protobuf_package_dir}/bin/protoc-[0-9]*")
+    list(LENGTH ros2_sdk_protoc_candidates ros2_sdk_protoc_count)
+    if(NOT ros2_sdk_protoc_count EQUAL 1)
+      message(FATAL_ERROR
+              "Expected exactly one Conan protoc executable, found "
+              "${ros2_sdk_protoc_count} in ${ros2_sdk_protobuf_package_dir}/bin")
+    endif()
+    list(GET ros2_sdk_protoc_candidates 0 PROTOC_PROGRAM)
+    set(PROTOC_PROGRAM "${PROTOC_PROGRAM}" CACHE FILEPATH
+        "Conan protobuf compiler" FORCE)
+  endif()
+
+  find_package(Protobuf MODULE REQUIRED)
+  find_package(gRPC CONFIG REQUIRED)
+
+  include(cmake/ros2_sdk_grpc.cmake)
+  ros2_sdk_add_grpc_library(ros2_sdk_grpc_smoke proto/grpc_smoke.proto)
+
   ament_add_gtest(test_error_model test/test_error_model.cpp)
   target_link_libraries(test_error_model ${PROJECT_NAME})
 
   ament_add_gtest(test_result test/test_result.cpp)
   target_link_libraries(test_result ${PROJECT_NAME})
+
+  ament_add_gtest(GrpcSmoke test/test_grpc_smoke.cpp)
+  target_link_libraries(GrpcSmoke ${PROJECT_NAME} ros2_sdk_grpc_smoke)
 endif()
 
 ament_package()
