@@ -22,13 +22,17 @@ class WorkspaceManager:
         self._docker.exec(
             "bash", "-c",
             "conan install . "
+            "--lockfile=conan.lock "
             "--output-folder=build "
             "--build=missing "
             "-s build_type=Release "
             "-s compiler.cppstd=17 "
             "&& . build/conanbuild.sh "
             "&& colcon build --base-paths src --symlink-install "
-            "--cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+            "--cmake-args "
+            "-DCMAKE_TOOLCHAIN_FILE=/workspace/build/conan_toolchain.cmake "
+            "-DCMAKE_BUILD_TYPE=Release "
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
         )
 
     def test(self, filter_pattern: str | None = None) -> None:

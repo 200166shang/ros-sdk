@@ -4,9 +4,15 @@
 # JSON support, and unit testing.
 
 [requires]
+grpc/1.82.0          # gRPC runtime and C++ code generation
 spdlog/1.14.1        # Structured logging
 nlohmann_json/3.11.3 # JSON — structured log payloads and configuration
 gtest/1.14.0         # Unit testing
+
+[options]
+grpc/*:codegen=True
+grpc/*:cpp_plugin=True
+grpc/*:shared=False
 
 [generators]
 CMakeDeps
