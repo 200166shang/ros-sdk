@@ -17,6 +17,9 @@ __pycache__/
 conan_cache/
 CMakeUserPresets.json
 
+# Local environment credentials
+.env
+
 # Internal planning docs — user-facing docs (API, README) are committed
 docs/prd.md
 docs/landscape-analysis.md
