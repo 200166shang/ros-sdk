@@ -17,10 +17,10 @@ env:
   # was built for the default x86_64 runner and must not be reused on ARM64.
   CI_IMAGE: ghcr.io/200166shang/ros-sdk:ci-arm64-main
   LOCAL_CI_IMAGE: rosbridge:pr-ci-arm64
-  # These values are supplied as repository secrets. The build helper keeps
-  # the remote optional and falls back when the server is unavailable.
+  # The URL is public infrastructure metadata; credentials stay in Secrets.
+  # The build helper keeps the remote optional and falls back when unavailable.
   CONAN_REMOTE_NAME: rosbridge
-  CONAN_REMOTE_URL: ${{ secrets.CONAN_REMOTE_URL }}
+  CONAN_REMOTE_URL: http://106.55.24.85:9300
   CONAN_LOGIN_USERNAME: ${{ secrets.CONAN_LOGIN_USERNAME }}
   CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
 
