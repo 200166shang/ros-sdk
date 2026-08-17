@@ -17,7 +17,7 @@ class WorkspaceManager:
 
     def build(self, clean: bool = False) -> None:
         """Run full build: conan install + colcon build."""
-        command = ["bash", "/workspace/scripts/container/build_workspace.sh"]
+        command = ["python3", "-m", "scripts.ci", "build-workspace"]
         if clean:
             command.append("--clean")
         self._docker.exec(*command)

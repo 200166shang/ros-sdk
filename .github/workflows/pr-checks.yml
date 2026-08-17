@@ -41,19 +41,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
-          printf '%s\n' "$changed_files"
-
-          if printf '%s\n' "$changed_files" | grep -Eq \
-            '^(Dockerfile|docker/|docker-compose\.yaml$|conanfile\.txt$|conan\.lock$|src/ros2_sdk/(package\.xml|CMakeLists\.txt)$)'; then
-            echo "environment_changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "environment_changed=false" >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 -m scripts.ci detect-changes
 
   ci:
     name: Build, lint, and test
@@ -75,44 +63,16 @@ jobs:
       - name: Prepare CI image
         env:
           ENVIRONMENT_CHANGED: ${{ needs.changes.outputs.environment_changed }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cache_available=false
-          if docker pull "$CI_IMAGE"; then
-            cache_available=true
-          fi
-
-          if [ "$ENVIRONMENT_CHANGED" = "true" ] || [ "$cache_available" = "false" ]; then
-            build_args=(--build-arg BUILDKIT_INLINE_CACHE=1)
-            if [ "$cache_available" = "true" ]; then
-              build_args+=(--cache-from "$CI_IMAGE")
-            fi
-            DOCKER_BUILDKIT=1 docker build "${build_args[@]}" \
-              --file docker/Dockerfile \
-              --target ci \
-              --tag "$LOCAL_CI_IMAGE" .
-            echo "ROSBRIDGE_IMAGE=$LOCAL_CI_IMAGE" >> "$GITHUB_ENV"
-          else
-            echo "ROSBRIDGE_IMAGE=$CI_IMAGE" >> "$GITHUB_ENV"
-          fi
+        run: python3 -m scripts.ci prepare-image
 
       - name: Start the ROS 2 service
-        shell: bash
-        run: |
-          set -euo pipefail
-          if docker compose version >/dev/null 2>&1; then
-            docker compose --project-name rosbridge up --detach ros2
-          else
-            docker-compose --project-name rosbridge up --detach ros2
-          fi
+        run: python3 -m scripts.ci compose-up
 
       - name: Verify ARM64 build environment
-        run: ./scripts/ci/verify_arm64_environment.sh
+        run: python3 -m scripts.ci verify-arm64
 
       - name: Verify Conan remote
-        run: ./scripts/ci/verify_conan_remote.sh
+        run: python3 -m scripts.ci verify-conan
 
       - name: Run the repository CI workflow
         run: ./rb ci
@@ -128,10 +88,4 @@ jobs:
 
       - name: Stop the ROS 2 service
         if: always()
-        shell: bash
-        run: |
-          if docker compose version >/dev/null 2>&1; then
-            docker compose --project-name rosbridge down --remove-orphans
-          else
-            docker-compose --project-name rosbridge down --remove-orphans
-          fi
+        run: python3 -m scripts.ci compose-down
