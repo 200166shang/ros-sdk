@@ -13,13 +13,15 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CI_IMAGE: ghcr.io/200166shang/ros-sdk:ci-main
-  LOCAL_CI_IMAGE: rosbridge:pr-ci
+  # Keep the CI image tag architecture-specific. The previous ci-main image
+  # was built for the default x86_64 runner and must not be reused on ARM64.
+  CI_IMAGE: ghcr.io/200166shang/ros-sdk:ci-arm64-main
+  LOCAL_CI_IMAGE: rosbridge:pr-ci-arm64
 
 jobs:
   changes:
     name: Detect environment changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     outputs:
       environment_changed: ${{ steps.detect.outputs.environment_changed }}
     steps:
@@ -50,7 +52,7 @@ jobs:
   ci:
     name: Build, lint, and test
     needs: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Check out the pull request
         uses: actions/checkout@v4
@@ -99,6 +101,19 @@ jobs:
           else
             docker-compose --project-name rosbridge up --detach ros2
           fi
+
+      - name: Verify ARM64 build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(uname -m)" = "aarch64"
+          test "$(docker exec ros2 uname -m)" = "aarch64"
+          docker image inspect "$ROSBRIDGE_IMAGE" \
+            --format 'Docker image architecture: {{.Architecture}}' | grep -Fx \
+            'Docker image architecture: arm64'
+          docker exec ros2 bash -lc \
+            'conan profile show -pr:h default | grep -Fx "arch=armv8"'
 
       - name: Run the repository CI workflow
         run: ./rb ci
