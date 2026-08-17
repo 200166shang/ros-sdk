@@ -60,14 +60,7 @@ jobs:
       - name: Start the candidate ROS 2 service
         env:
           ROSBRIDGE_IMAGE: ${{ env.CANDIDATE_IMAGE }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if docker compose version >/dev/null 2>&1; then
-            docker compose --project-name rosbridge up --detach ros2
-          else
-            docker-compose --project-name rosbridge up --detach ros2
-          fi
+        run: python3 -m scripts.ci compose-up
 
       - name: Run the repository CI workflow
         env:
@@ -85,16 +78,7 @@ jobs:
 
       - name: Stop the candidate ROS 2 service
         if: always()
-        shell: bash
-        run: |
-          if docker compose version >/dev/null 2>&1; then
-            docker compose --project-name rosbridge down --remove-orphans
-          else
-            docker-compose --project-name rosbridge down --remove-orphans
-          fi
+        run: python3 -m scripts.ci compose-down
 
       - name: Publish the validated ci-main image
-        run: |
-          set -euo pipefail
-          docker tag "$CANDIDATE_IMAGE" "$CI_IMAGE"
-          docker push "$CI_IMAGE"
+        run: python3 -m scripts.ci publish-image
