@@ -52,12 +52,48 @@ pip install -r scripts/requirements.txt
 
 运行 `./rb --help` 可以查看完整开发命令。
 
+### Gazebo/TurtleBot3 容器验证
+
+开发镜像包含 Gazebo 和 TurtleBot3。启动仿真时，Gazebo GUI 会渲染到 noVNC 容器的 X
+server，可在浏览器中查看：
+
+```bash
+# 终端一：构建并启动容器
+./rb docker build-image
+./rb docker up
+
+# 终端二：启动 Gazebo 和 TurtleBot3 Burger
+./rb gazebo start
+```
+
+打开 [http://localhost:6080/vnc_auto.html](http://localhost:6080/vnc_auto.html)，应能看到
+TurtleBot3 Burger 和默认世界。若浏览器仍显示 `WebUtil.fetchJSON is not a function`，说明
+浏览器缓存了旧版 noVNC 前端资源；可先执行硬刷新，或改用
+[http://127.0.0.1:6080/vnc_auto.html](http://127.0.0.1:6080/vnc_auto.html)。另开终端执行最小
+ROS 2 检查：
+
+```bash
+docker-compose exec ros2 ros2 node list
+docker-compose exec ros2 ros2 topic echo /odom --once
+```
+
+看到 Gazebo/ROS 节点并收到 `/odom` 消息后，可停止仿真和容器：
+
+```bash
+./rb gazebo stop
+./rb docker down
+```
+
+macOS + Colima 用户如果 Docker socket 未自动配置，先设置
+`DOCKER_HOST=unix://$HOME/.colima/default/docker.sock`。noVNC 使用容器内的独立 X server，
+不需要宿主机安装 ROS 2 或 Gazebo。
+
 ## CI
 
-每个 Pull Request 都会在 Docker 环境中执行 Build、Lint 和 Test。普通源码变更复用
-GHCR 中最新的 `ci-main` 镜像；Dockerfile、Conan 或 ROS 依赖变更会在当前 PR 中构建临时
-镜像进行验证。环境变更合入 `main` 并通过验证后，GitHub Actions 会更新
-`ghcr.io/200166shang/ros-sdk:ci-main`。项目不保存每个 PR 或 commit 的临时镜像。
+每个 Pull Request 都会在原生 Linux ARM64 Docker 环境中执行 Build、Lint 和 Test。普通源码
+变更复用 GHCR 中最新的 `ci-arm64-main` 镜像；Dockerfile、Conan 或 ROS 依赖变更会在当前
+PR 中构建临时镜像进行验证。环境变更合入 `main` 并通过验证后，GitHub Actions 会更新
+`ghcr.io/200166shang/ros-sdk:ci-arm64-main`。项目不保存每个 PR 或 commit 的临时镜像。
 
 Dockerfile 提供两个构建目标：本地 Compose 默认使用包含 Gazebo、TurtleBot3 和 ros-gz
 的 `dev` 目标；GitHub Actions 使用只包含编译、测试和静态分析依赖的 `ci` 目标。模拟器
