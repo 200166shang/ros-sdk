@@ -109,40 +109,10 @@ jobs:
           fi
 
       - name: Verify ARM64 build environment
-        shell: bash
-        run: |
-          set -euo pipefail
+        run: ./scripts/ci/verify_arm64_environment.sh
 
-          test "$(uname -m)" = "aarch64"
-          test "$(docker exec ros2 uname -m)" = "aarch64"
-          docker image inspect "$ROSBRIDGE_IMAGE" \
-            --format 'Docker image architecture: {{.Architecture}}' | grep -Fx \
-            'Docker image architecture: arm64'
-          docker exec ros2 bash -lc \
-            'conan profile show -pr:h default | grep -Fx "arch=armv8"'
-
-      - name: Verify Conan remote reachability
-        if: env.CONAN_REMOTE_URL != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          docker exec ros2 python3 -c \
-            'import os, urllib.request; urllib.request.urlopen(
-            os.environ["CONAN_REMOTE_URL"] + "/v1/ping", timeout=10)'
-          echo "Conan remote is reachable"
-
-      - name: Verify Conan remote credentials
-        if: env.CONAN_REMOTE_URL != '' && env.CONAN_PASSWORD != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          status=$(curl --silent --show-error --output /dev/null \
-            --write-out '%{http_code}' \
-            --user "$CONAN_LOGIN_USERNAME:$CONAN_PASSWORD" \
-            "$CONAN_REMOTE_URL/v2/users/authenticate")
-          test "$status" = "200"
-          echo "Conan remote credentials accepted"
+      - name: Verify Conan remote
+        run: ./scripts/ci/verify_conan_remote.sh
 
       - name: Run the repository CI workflow
         run: ./rb ci
