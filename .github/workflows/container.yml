@@ -1,4 +1,4 @@
-name: CI Image
+name: ARM64 CI Image
 
 on:
   push:
@@ -18,17 +18,17 @@ permissions:
   packages: write
 
 concurrency:
-  group: ci-image-main
+  group: ci-image-arm64-main
   cancel-in-progress: false
 
 env:
-  CI_IMAGE: ghcr.io/200166shang/ros-sdk:ci-main
-  CANDIDATE_IMAGE: rosbridge:ci-candidate
+  CI_IMAGE: ghcr.io/200166shang/ros-sdk:ci-arm64-main
+  CANDIDATE_IMAGE: rosbridge:ci-arm64-candidate
 
 jobs:
   build-validate-publish:
-    name: Build, validate, and publish CI image
-    runs-on: ubuntu-latest
+    name: Build, validate, and publish ARM64 CI image
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Check out main
         uses: actions/checkout@v4
@@ -80,5 +80,5 @@ jobs:
         if: always()
         run: python3 -m scripts.ci compose-down
 
-      - name: Publish the validated ci-main image
+      - name: Publish the validated ci-arm64-main image
         run: python3 -m scripts.ci publish-image

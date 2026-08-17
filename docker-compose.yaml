@@ -3,8 +3,8 @@
 # Services:
 #   ros2   — main development container: ROS 2 Jazzy + build toolchain,
 #            with the repository bind-mounted at /workspace.
-#   novnc  — browser-based VNC viewer (http://localhost:6080) for the ROS 2
-#            container's display (VNC server on ros2:5900, enabled later).
+#   novnc  — browser-based VNC viewer (http://localhost:6080) with the X server
+#            used by Gazebo in the ros2 container.
 
 services:
   ros2:
@@ -18,8 +18,11 @@ services:
     tty: true
     # Keep the container alive for interactive development.
     command: tail -f /dev/null
+    depends_on:
+      - novnc
     environment:
-      DISPLAY: ":99"
+      # Gazebo renders into the X server owned by the noVNC container.
+      DISPLAY: "novnc:0"
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
       ROS_DOMAIN_ID: "42"
       # Optional Conan remote configuration. Keep credentials outside the
@@ -45,13 +48,9 @@ services:
   novnc:
     image: theasp/novnc:latest
     container_name: novnc
-    environment:
-      # Connects to the VNC server running inside the `ros2` container.
-      VNC_SERVER: "ros2:5900"
     ports:
-      - "6080:6080"
-    depends_on:
-      - ros2
+      # theasp/novnc serves noVNC on port 8080 inside the container.
+      - "6080:8080"
 
 volumes:
   conan_cache:
