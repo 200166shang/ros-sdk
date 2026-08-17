@@ -22,6 +22,12 @@ services:
       DISPLAY: ":99"
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
       ROS_DOMAIN_ID: "42"
+      # Optional Conan remote configuration. Keep credentials outside the
+      # repository; .env is ignored and .env.example documents the names.
+      CONAN_REMOTE_NAME: ${CONAN_REMOTE_NAME:-rosbridge}
+      CONAN_REMOTE_URL: ${CONAN_REMOTE_URL:-}
+      CONAN_LOGIN_USERNAME: ${CONAN_LOGIN_USERNAME:-}
+      CONAN_PASSWORD: ${CONAN_PASSWORD:-}
     ports:
       - "8080:8080" # HTTP gateway
       - "9090:9090" # WebSocket
