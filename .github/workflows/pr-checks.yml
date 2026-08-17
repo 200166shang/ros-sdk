@@ -21,7 +21,7 @@ env:
   # The build helper keeps the remote optional and falls back when unavailable.
   CONAN_REMOTE_NAME: rosbridge
   CONAN_REMOTE_URL: http://106.55.24.85:9300
-  CONAN_LOGIN_USERNAME: ${{ secrets.CONAN_LOGIN_USERNAME }}
+  CONAN_LOGIN_USERNAME: ci-reader
   CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
 
 jobs:
@@ -131,6 +131,18 @@ jobs:
             'import os, urllib.request; urllib.request.urlopen(
             os.environ["CONAN_REMOTE_URL"] + "/v1/ping", timeout=10)'
           echo "Conan remote is reachable"
+
+      - name: Verify Conan remote credentials
+        if: env.CONAN_REMOTE_URL != '' && env.CONAN_PASSWORD != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=$(curl --silent --show-error --output /dev/null \
+            --write-out '%{http_code}' \
+            --user "$CONAN_LOGIN_USERNAME:$CONAN_PASSWORD" \
+            "$CONAN_REMOTE_URL/v2/users/authenticate")
+          test "$status" = "200"
+          echo "Conan remote credentials accepted"
 
       - name: Run the repository CI workflow
         run: ./rb ci
