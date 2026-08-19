@@ -1,2 +1,4 @@
 click>=8.0.0
 rich>=13.0.0
+grpcio>=1.70.0,<2
+grpcio-tools>=1.70.0,<2

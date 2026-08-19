@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package ros2_sdk.skeleton;
+
+service NavigationRpc {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Navigate(NavigateRequest) returns (NavigateResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ready = 1;
+  string message = 2;
+}
+
+message NavigateRequest {
+  string target_name = 1;
+}
+
+message NavigateResponse {
+  enum Outcome {
+    OUTCOME_UNSPECIFIED = 0;
+    SUCCEEDED = 1;
+    INVALID_TARGET = 2;
+    ACTION_SERVER_UNAVAILABLE = 3;
+    GOAL_REJECTED = 4;
+    ABORTED = 5;
+    TIMEOUT = 6;
+    INTERNAL_ERROR = 7;
+  }
+
+  Outcome outcome = 1;
+  string message = 2;
+}

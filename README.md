@@ -84,6 +84,53 @@ docker-compose exec ros2 ros2 topic echo /odom --once
 ./rb docker down
 ```
 
+### 最薄导航链路验证
+
+当前阶段提供一个固定目标的临时 Walking Skeleton，用来验证宿主机 Python、容器内 C++、
+Nav2 和 Gazebo 能否贯通。它不是最终配送 API，也不包含 feedback 流、显式取消 RPC 或任务
+状态机；gRPC deadline/断开连接会取消当前 Nav2 goal。
+
+在 Gazebo 已启动后，另开终端启动 Nav2，并发布 TurtleBot3 的初始位姿：
+
+```bash
+docker exec -it ros2 bash -lc '
+  source /opt/ros/jazzy/setup.bash
+  export TURTLEBOT3_MODEL=burger
+  ros2 launch turtlebot3_navigation2 navigation2.launch.py \
+    use_sim_time:=True \
+    map:=/opt/ros/jazzy/share/turtlebot3_navigation2/map/map.yaml
+'
+
+docker exec -it ros2 bash -lc "
+  source /opt/ros/jazzy/setup.bash
+  ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped \
+  '{header: {frame_id: map}, pose: {pose: {position: {x: -2.0, y: -0.5, z: 0.0}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}, covariance: [0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.06853891945200942]}}'
+"
+```
+
+在第三个终端启动 C++ 服务：
+
+```bash
+./rb build
+docker exec -it ros2 bash -lc '
+  source /opt/ros/jazzy/setup.bash
+  source /workspace/install/setup.bash
+  ros2 run ros2_sdk ros2_sdk_server
+'
+```
+
+宿主机安装 Python 客户端依赖并发送固定的 `pickup_a` 目标：
+
+```bash
+python3 -m venv .venv-navigation
+.venv-navigation/bin/python -m pip install -r scripts/requirements.txt
+.venv-navigation/bin/python scripts/navigation_client.py --target pickup_a
+```
+
+预期输出包含 `health.ready=True` 和 `outcome=1 message=Nav2 goal succeeded`。当前临时目标
+坐标为 `map` 坐标系中的 `(1.7, -1.5)`；`unknown` 目标会返回 `INVALID_TARGET`，Nav2 不可用
+时会在有界时间内返回明确失败。
+
 macOS + Colima 用户如果 Docker socket 未自动配置，先设置
 `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock`。noVNC 使用容器内的独立 X server，
 不需要宿主机安装 ROS 2 或 Gazebo。
