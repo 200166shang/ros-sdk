@@ -18,6 +18,19 @@ RosBridge Pro 是基于 C++17 和 ROS 2 Jazzy 的机器人运行时框架，负�
 本文件只保存每次任务都需要遵守的仓库级规则。详细需求放在本地 PRD 或 Issue，长期
 技术决策放在对应设计或 ADR；不要把完整文档复制进 `AGENTS.md`。
 
+## Agent skills
+
+### Issue tracker
+
+Specs and implementation tickets are tracked in GitHub Issues. See
+`docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+This is a single-context repository. Use `CONTEXT.md` for the domain glossary,
+`docs/modules/` for module designs, and `docs/architecture/adr/` for durable architecture
+decisions. See `docs/agents/domain.md`.
+
 ## 开发命令
 
 在宿主机的仓库根目录通过 `./rb` 启动项目工作流。build、test 和 lint 会在 `ros2` 容器
