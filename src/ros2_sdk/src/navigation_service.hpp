@@ -5,22 +5,35 @@
 
 #include <memory>
 
-#include "navigation_action_client.hpp"
 #include "navigation_smoke.grpc.pb.h"
+#include "navigation_task_manager.hpp"
 
 namespace ros2_sdk::skeleton {
 
-class NavigationService final : public NavigationRpc::Service {
+class NavigationService final : public ros2_sdk::api::NavigationRpc::Service {
 public:
-  explicit NavigationService(std::shared_ptr<NavigationActionClient> action_client);
+  explicit NavigationService(std::shared_ptr<NavigationTaskManager> task_manager);
 
-  grpc::Status Health(grpc::ServerContext* context, const HealthRequest* request,
-                      HealthResponse* response) override;
-  grpc::Status Navigate(grpc::ServerContext* context, const NavigateRequest* request,
-                        NavigateResponse* response) override;
+  grpc::Status Health(grpc::ServerContext* context, const ros2_sdk::api::HealthRequest* request,
+                      ros2_sdk::api::HealthResponse* response) override;
+  grpc::Status StartNavigation(grpc::ServerContext* context,
+                               const ros2_sdk::api::StartNavigationRequest* request,
+                               ros2_sdk::api::StartNavigationResponse* response) override;
+  grpc::Status GetNavigation(grpc::ServerContext* context,
+                             const ros2_sdk::api::GetNavigationRequest* request,
+                             ros2_sdk::api::GetNavigationResponse* response) override;
+  grpc::Status CancelNavigation(grpc::ServerContext* context,
+                                const ros2_sdk::api::CancelNavigationRequest* request,
+                                ros2_sdk::api::CancelNavigationResponse* response) override;
+  grpc::Status WatchNavigation(grpc::ServerContext* context,
+                               const ros2_sdk::api::WatchNavigationRequest* request,
+                               grpc::ServerWriter<ros2_sdk::api::NavigationEvent>* writer) override;
 
 private:
-  std::shared_ptr<NavigationActionClient> action_client_;
+  static void fill_task(const NavigationTask& task, ros2_sdk::api::NavigationTask* proto_task);
+  static bool is_terminal(const NavigationTask& task);
+
+  std::shared_ptr<NavigationTaskManager> task_manager_;
 };
 
 }  // namespace ros2_sdk::skeleton

@@ -1,10 +1,13 @@
 syntax = "proto3";
 
-package ros2_sdk.skeleton;
+package ros2_sdk.api;
 
 service NavigationRpc {
   rpc Health(HealthRequest) returns (HealthResponse);
-  rpc Navigate(NavigateRequest) returns (NavigateResponse);
+  rpc StartNavigation(StartNavigationRequest) returns (StartNavigationResponse);
+  rpc GetNavigation(GetNavigationRequest) returns (GetNavigationResponse);
+  rpc CancelNavigation(CancelNavigationRequest) returns (CancelNavigationResponse);
+  rpc WatchNavigation(WatchNavigationRequest) returns (stream NavigationEvent);
 }
 
 message HealthRequest {}
@@ -14,22 +17,72 @@ message HealthResponse {
   string message = 2;
 }
 
-message NavigateRequest {
+message StartNavigationRequest {
   string target_name = 1;
 }
 
-message NavigateResponse {
-  enum Outcome {
+message NavigationTask {
+  string task_id = 1;
+  string target_name = 2;
+  NavigationTaskState state = 3;
+  string message = 4;
+  string feedback = 5;
+  NavigationOutcome outcome = 6;
+}
+
+message NavigationOutcome {
+  enum Code {
     OUTCOME_UNSPECIFIED = 0;
-    SUCCEEDED = 1;
-    INVALID_TARGET = 2;
-    ACTION_SERVER_UNAVAILABLE = 3;
-    GOAL_REJECTED = 4;
-    ABORTED = 5;
-    TIMEOUT = 6;
-    INTERNAL_ERROR = 7;
+    OUTCOME_SUCCEEDED = 1;
+    OUTCOME_INVALID_TARGET = 2;
+    OUTCOME_ACTION_SERVER_UNAVAILABLE = 3;
+    OUTCOME_GOAL_REJECTED = 4;
+    OUTCOME_ABORTED = 5;
+    OUTCOME_TIMEOUT = 6;
+    OUTCOME_INTERNAL_ERROR = 7;
+    OUTCOME_CANCELED = 8;
+    OUTCOME_FAILED = 9;
   }
 
-  Outcome outcome = 1;
+  Code code = 1;
   string message = 2;
+}
+
+enum NavigationTaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  TASK_ACCEPTED = 1;
+  TASK_RUNNING = 2;
+  TASK_CANCELING = 3;
+  TASK_SUCCEEDED = 4;
+  TASK_CANCELED = 5;
+  TASK_REJECTED = 6;
+  TASK_FAILED = 7;
+}
+
+message StartNavigationResponse {
+  NavigationTask task = 1;
+}
+
+message GetNavigationRequest {
+  string task_id = 1;
+}
+
+message GetNavigationResponse {
+  NavigationTask task = 1;
+}
+
+message CancelNavigationRequest {
+  string task_id = 1;
+}
+
+message CancelNavigationResponse {
+  NavigationTask task = 1;
+}
+
+message WatchNavigationRequest {
+  string task_id = 1;
+}
+
+message NavigationEvent {
+  NavigationTask task = 1;
 }

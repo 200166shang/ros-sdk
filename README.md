@@ -84,11 +84,12 @@ docker-compose exec ros2 ros2 topic echo /odom --once
 ./rb docker down
 ```
 
-### 最薄导航链路验证
+### 异步导航链路验证
 
-当前阶段提供一个固定目标的临时 Walking Skeleton，用来验证宿主机 Python、容器内 C++、
-Nav2 和 Gazebo 能否贯通。它不是最终配送 API，也不包含 feedback 流、显式取消 RPC 或任务
-状态机；gRPC deadline/断开连接会取消当前 Nav2 goal。
+当前阶段提供一个固定目标的异步导航任务链路，用来验证宿主机 Python、容器内 C++、Nav2
+和 Gazebo 能否贯通。客户端通过 `StartNavigation` 创建任务，通过 `GetNavigation` 查询、
+`CancelNavigation` 取消，并用 `WatchNavigation` 接收任务状态事件。任务状态为
+`ACCEPTED`、`RUNNING`、`CANCELING`、`SUCCEEDED`、`CANCELED`、`REJECTED` 或 `FAILED`。
 
 在 Gazebo 已启动后，另开终端启动 Nav2，并发布 TurtleBot3 的初始位姿：
 
@@ -127,9 +128,18 @@ python3 -m venv .venv-navigation
 .venv-navigation/bin/python scripts/navigation_client.py --target pickup_a
 ```
 
-预期输出包含 `health.ready=True` 和 `outcome=1 message=Nav2 goal succeeded`。当前临时目标
-坐标为 `map` 坐标系中的 `(1.7, -1.5)`；`unknown` 目标会返回 `INVALID_TARGET`，Nav2 不可用
-时会在有界时间内返回明确失败。
+预期输出包含 `health.ready=True`，以及从 `ACCEPTED`/`RUNNING` 到终态的任务事件。当前固定
+目标坐标为 `map` 坐标系中的 `(1.7, -1.5)`；未知目标会生成 `REJECTED` 任务，Nav2 不可用
+时会生成 `FAILED` 任务。
+
+要验证显式取消路径，可在观察任务的同时指定取消延迟：
+
+```bash
+.venv-navigation/bin/python scripts/navigation_client.py \
+  --target pickup_a --cancel-after 3
+```
+
+客户端会输出 `cancel requested state=CANCELING`，随后观察到 `CANCELED` 终态。
 
 macOS + Colima 用户如果 Docker socket 未自动配置，先设置
 `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock`。noVNC 使用容器内的独立 X server，

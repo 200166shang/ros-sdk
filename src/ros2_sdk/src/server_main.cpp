@@ -5,14 +5,23 @@
 #include <rclcpp/rclcpp.hpp>
 #include <thread>
 
+#include "nav2_navigation_adapter.hpp"
 #include "navigation_service.hpp"
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
 
   auto node = std::make_shared<rclcpp::Node>("ros2_sdk_server");
-  auto action_client = std::make_shared<ros2_sdk::skeleton::NavigationActionClient>(node);
-  ros2_sdk::skeleton::NavigationService service(action_client);
+  auto task_manager = std::make_shared<ros2_sdk::skeleton::NavigationTaskManager>();
+  const std::weak_ptr<ros2_sdk::skeleton::NavigationTaskManager> weak_task_manager = task_manager;
+  auto navigation_adapter = std::make_shared<ros2_sdk::skeleton::Nav2NavigationAdapter>(
+      node, [weak_task_manager](const ros2_sdk::skeleton::NavigationAdapterEvent& event) {
+        if (const auto manager = weak_task_manager.lock()) {
+          manager->handle_adapter_event(event);
+        }
+      });
+  task_manager->set_adapter(navigation_adapter);
+  ros2_sdk::skeleton::NavigationService service(task_manager);
 
   grpc::ServerBuilder builder;
   int selected_port = 0;

@@ -1,4 +1,4 @@
-"""Call the temporary fixed-target navigation RPC from the host machine."""
+"""Start and watch a fixed-target navigation task from the host machine."""
 
 from __future__ import annotations
 
@@ -6,13 +6,14 @@ import argparse
 import pathlib
 import sys
 import tempfile
+import threading
 
 import grpc
 from grpc_tools import protoc
 
 
 def load_generated_modules(output_dir: pathlib.Path) -> tuple[object, object]:
-    """Generate and import Python modules for the temporary smoke protocol."""
+    """Generate and import Python modules for the navigation protocol."""
     proto = pathlib.Path(__file__).parents[1] / "src/ros2_sdk/proto/navigation_smoke.proto"
     result = protoc.main(
         [
@@ -38,6 +39,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--address", default="127.0.0.1:8765")
     parser.add_argument("--target", default="pickup_a")
     parser.add_argument("--timeout", type=float, default=70.0)
+    parser.add_argument(
+        "--cancel-after",
+        type=float,
+        default=None,
+        help="request cancellation after this many seconds while watching",
+    )
     return parser.parse_args()
 
 
@@ -49,12 +56,47 @@ def main() -> int:
             stub = services.NavigationRpcStub(channel)
             health = stub.Health(messages.HealthRequest(), timeout=3.0)
             print(f"health.ready={health.ready} message={health.message}")
-            response = stub.Navigate(
-                messages.NavigateRequest(target_name=args.target), timeout=args.timeout
+            started = stub.StartNavigation(
+                messages.StartNavigationRequest(target_name=args.target), timeout=3.0
             )
+            task = started.task
+            print(f"task.id={task.task_id} state={task.state} message={task.message}")
+            cancel_stop = threading.Event()
+            cancel_thread = None
+            if args.cancel_after is not None:
+                def cancel_later() -> None:
+                    if cancel_stop.wait(args.cancel_after):
+                        return
+                    try:
+                        canceled = stub.CancelNavigation(
+                            messages.CancelNavigationRequest(task_id=task.task_id), timeout=3.0
+                        )
+                        print(f"cancel requested state={canceled.task.state}")
+                    except grpc.RpcError as error:
+                        print(f"cancel failed: {error}", file=sys.stderr)
 
-    print(f"outcome={response.outcome} message={response.message}")
-    return 0 if response.outcome == messages.NavigateResponse.SUCCEEDED else 1
+                cancel_thread = threading.Thread(target=cancel_later, daemon=True)
+                cancel_thread.start()
+            try:
+                events = stub.WatchNavigation(
+                    messages.WatchNavigationRequest(task_id=task.task_id), timeout=args.timeout
+                )
+                last = task
+                for event in events:
+                    last = event.task
+                    print(
+                        f"task.id={last.task_id} state={last.state} "
+                        f"feedback={last.feedback} message={last.message}"
+                    )
+            except grpc.RpcError as error:
+                print(f"watch failed: {error}", file=sys.stderr)
+                return 1
+            finally:
+                cancel_stop.set()
+                if cancel_thread is not None:
+                    cancel_thread.join()
+
+    return 0 if last.state in (messages.TASK_SUCCEEDED, messages.TASK_CANCELED) else 1
 
 
 if __name__ == "__main__":

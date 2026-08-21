@@ -77,14 +77,27 @@ if(ros2_sdk_protobuf_codegen_helper)
 endif()
 
 find_package(Protobuf MODULE REQUIRED)
-find_package(gRPC CONFIG REQUIRED)
+# Conan's CMakeDeps files are generated in the workspace build directory while
+# colcon configures this package in a child directory. Keep the package lookup
+# deterministic even when the toolchain does not propagate that prefix.
+find_package(gRPC CONFIG QUIET PATHS
+  "${CMAKE_BINARY_DIR}/.."
+  "${CMAKE_BINARY_DIR}"
+  NO_DEFAULT_PATH)
+if(NOT gRPC_FOUND)
+  find_package(gRPC CONFIG REQUIRED)
+endif()
 
 include(cmake/ros2_sdk_grpc.cmake)
 ros2_sdk_add_grpc_library(ros2_sdk_navigation_proto proto/navigation_smoke.proto)
 
 add_executable(ros2_sdk_server
-  src/navigation_action_client.cpp
+  src/fixed_target_catalog.cpp
+  src/navigation_task.cpp
+  src/navigation_task_manager.cpp
+  src/nav2_navigation_adapter.cpp
   src/navigation_service.cpp
+  src/task_event_hub.cpp
   src/server_main.cpp)
 target_include_directories(ros2_sdk_server PRIVATE src include)
 target_link_libraries(ros2_sdk_server
@@ -112,14 +125,38 @@ if(BUILD_TESTING)
   ament_add_gtest(NavigationServiceTest test/test_navigation_service.cpp)
   target_include_directories(NavigationServiceTest PRIVATE src include)
   target_sources(NavigationServiceTest PRIVATE
-    src/navigation_action_client.cpp
-    src/navigation_service.cpp)
+    src/fixed_target_catalog.cpp
+    src/navigation_task.cpp
+    src/navigation_task_manager.cpp
+    src/nav2_navigation_adapter.cpp
+    src/navigation_service.cpp
+    src/task_event_hub.cpp)
   target_link_libraries(NavigationServiceTest
     ${PROJECT_NAME}
     ros2_sdk_navigation_proto
     gRPC::grpc++)
   ament_target_dependencies(NavigationServiceTest
     rclcpp rclcpp_action nav2_msgs geometry_msgs)
+
+  ament_add_gtest(NavigationTaskManagerTest test/test_navigation_task_manager.cpp)
+  target_include_directories(NavigationTaskManagerTest PRIVATE src include)
+  target_sources(NavigationTaskManagerTest PRIVATE
+    src/navigation_task.cpp
+    src/navigation_task_manager.cpp
+    src/task_event_hub.cpp)
+  target_link_libraries(NavigationTaskManagerTest ${PROJECT_NAME})
+
+  ament_add_gtest(TaskEventHubTest test/test_task_event_hub.cpp)
+  target_include_directories(TaskEventHubTest PRIVATE src include)
+  target_sources(TaskEventHubTest PRIVATE src/navigation_task.cpp src/task_event_hub.cpp)
+  target_link_libraries(TaskEventHubTest ${PROJECT_NAME})
+
+  ament_add_gtest(FixedTargetCatalogTest test/test_fixed_target_catalog.cpp)
+  target_include_directories(FixedTargetCatalogTest PRIVATE src include)
+  target_sources(FixedTargetCatalogTest PRIVATE src/fixed_target_catalog.cpp)
+  target_link_libraries(FixedTargetCatalogTest ${PROJECT_NAME})
+  ament_target_dependencies(FixedTargetCatalogTest geometry_msgs)
+
 endif()
 
 ament_package()
