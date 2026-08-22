@@ -17,6 +17,8 @@ add_compile_options(-Wall -Wextra -Wpedantic -Werror)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(nav2_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -44,7 +46,8 @@ install(DIRECTORY include/ DESTINATION include)
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(
-  rclcpp std_msgs nav_msgs geometry_msgs sensor_msgs tf2 tf2_geometry_msgs)
+  rclcpp rclcpp_action nav2_msgs std_msgs nav_msgs geometry_msgs sensor_msgs tf2
+  tf2_geometry_msgs)
 
 # Protobuf and gRPC are Conan dependencies rather than ROS package dependencies.
 # Generate the runtime contract for the server even when tests are disabled.
@@ -76,13 +79,21 @@ find_package(Protobuf MODULE REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 include(cmake/ros2_sdk_grpc.cmake)
 ros2_sdk_add_grpc_library(ros2_sdk_runtime_health proto/runtime_health.proto)
+ros2_sdk_add_grpc_library(ros2_sdk_delivery proto/delivery.proto)
 
-add_library(ros2_sdk_runtime_service STATIC src/runtime_health_service.cpp)
+add_library(ros2_sdk_runtime_service STATIC
+  src/delivery_service.cpp
+  src/runtime_health_service.cpp)
 target_include_directories(ros2_sdk_runtime_service PUBLIC src)
-target_link_libraries(ros2_sdk_runtime_service PUBLIC ros2_sdk_runtime_health)
+target_link_libraries(ros2_sdk_runtime_service
+  ros2_sdk_runtime_health
+  ros2_sdk_delivery)
+ament_target_dependencies(ros2_sdk_runtime_service
+  rclcpp rclcpp_action nav2_msgs geometry_msgs)
 
 add_executable(rosbridge_runtime src/runtime_server.cpp)
-target_link_libraries(rosbridge_runtime PRIVATE ros2_sdk_runtime_service)
+target_link_libraries(rosbridge_runtime ros2_sdk_runtime_service)
+ament_target_dependencies(rosbridge_runtime rclcpp)
 
 install(TARGETS rosbridge_runtime RUNTIME DESTINATION lib/${PROJECT_NAME})
 

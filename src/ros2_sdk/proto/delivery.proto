@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package ros2_sdk.delivery;
+
+service DeliveryService {
+  rpc CreateDelivery(CreateDeliveryRequest) returns (DeliverySnapshot);
+  rpc GetDelivery(GetDeliveryRequest) returns (DeliverySnapshot);
+}
+
+message CreateDeliveryRequest {
+  string request_id = 1;
+  string pickup_location = 2;
+  string dropoff_location = 3;
+}
+
+message GetDeliveryRequest {
+  string task_id = 1;
+}
+
+enum DeliveryState {
+  DELIVERY_STATE_UNSPECIFIED = 0;
+  STARTING = 1;
+  NAVIGATING_TO_PICKUP = 2;
+  AWAITING_PICKUP_CONFIRMATION = 3;
+}
+
+message DeliverySnapshot {
+  string task_id = 1;
+  string request_id = 2;
+  string pickup_location = 3;
+  string dropoff_location = 4;
+  DeliveryState state = 5;
+  string current_target = 6;
+  optional double remaining_distance_m = 7;
+}

@@ -17,4 +17,17 @@ TEST(RuntimeHealthServiceTest, ReportsLivenessSeparatelyFromDeliveryReadiness) {
   EXPECT_EQ(response.readiness_reason(), "delivery capability is not available yet");
 }
 
+TEST(RuntimeHealthServiceTest, ReportsDeliveryReadinessFromTheRuntime) {
+  ros2_sdk::RuntimeHealthService service([] { return true; });
+  ros2_sdk::runtime::HealthRequest request;
+  ros2_sdk::runtime::HealthResponse response;
+
+  const grpc::Status status = service.Health(nullptr, &request, &response);
+
+  ASSERT_TRUE(status.ok()) << status.error_message();
+  EXPECT_TRUE(response.alive());
+  EXPECT_TRUE(response.delivery_ready());
+  EXPECT_EQ(response.readiness_reason(), "delivery capability is ready");
+}
+
 }  // namespace
