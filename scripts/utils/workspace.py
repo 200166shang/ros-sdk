@@ -44,7 +44,7 @@ class WorkspaceManager:
             "&& compile_db=$(find build -name compile_commands.json -print -quit); "
             "if [ -z \"$compile_db\" ]; then "
             "echo 'No compile_commands.json found — run ./rb build first'; exit 1; fi; "
-            "find src -type f \\( -name '*.hpp' -o -name '*.cpp' -o -name '*.h' \\) "
+            "find src -type f -name '*.cpp' "
             "-print0 | xargs -0 clang-tidy -p \"$(dirname \"$compile_db\")\"",
         )
 

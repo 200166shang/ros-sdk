@@ -59,6 +59,10 @@ class DockerManager:
             args.append("-it")
         self._run("exec", *args, "ros2", *cmd)
 
+    def exec_detached(self, *cmd: str) -> None:
+        """Run a command detached inside the 'ros2' service container."""
+        self._run("exec", "-d", "ros2", *cmd)
+
     def ps(self) -> None:
         """List running services."""
         self._run("ps")
