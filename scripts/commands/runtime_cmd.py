@@ -6,9 +6,7 @@ import shlex
 import time
 
 import click
-import grpc
 
-from scripts.rosbridge_client import RuntimeClient
 from scripts.utils.docker import DockerManager
 
 
@@ -43,6 +41,10 @@ def stop() -> None:
 
 def _wait_for_health(address: str, timeout_seconds: float = 5.0) -> None:
     """Wait until the host-mapped runtime answers the health RPC."""
+    import grpc
+
+    from scripts.rosbridge_client import RuntimeClient
+
     host, separator, port_text = address.rpartition(":")
     if not separator or not port_text.isdigit():
         raise click.ClickException(f"invalid runtime address: {address}")
