@@ -9,6 +9,7 @@ from scripts.commands.build_cmd import build_cmd
 from scripts.commands.test_cmd import test_cmd
 from scripts.commands.lint_cmd import lint_cmd, format_cmd
 from scripts.commands.gazebo_cmd import gazebo_cmd
+from scripts.commands.runtime_cmd import runtime_cmd
 from scripts.utils.workspace import WorkspaceManager
 
 
@@ -24,6 +25,7 @@ main.add_command(test_cmd, name="test")
 main.add_command(lint_cmd, name="lint")
 main.add_command(format_cmd, name="format")
 main.add_command(gazebo_cmd, name="gazebo")
+main.add_command(runtime_cmd, name="runtime")
 
 
 @main.command()

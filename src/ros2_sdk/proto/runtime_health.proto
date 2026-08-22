@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package ros2_sdk.runtime;
+
+service RuntimeService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool alive = 1;
+  bool delivery_ready = 2;
+  string readiness_reason = 3;
+}

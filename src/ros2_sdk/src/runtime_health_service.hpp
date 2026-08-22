@@ -1,0 +1,26 @@
+#ifndef ROS2_SDK__RUNTIME_HEALTH_SERVICE_HPP_
+#define ROS2_SDK__RUNTIME_HEALTH_SERVICE_HPP_
+
+#include <grpcpp/support/status.h>
+
+#include "runtime_health.grpc.pb.h"
+
+namespace ros2_sdk {
+
+/**
+ * Implements the Runtime health contract exposed to external clients.
+ *
+ * The service reports process liveness independently from delivery readiness.
+ * Delivery is intentionally unavailable until a later vertical slice connects
+ * the runtime to the navigation capability.
+ */
+class RuntimeHealthService final : public runtime::RuntimeService::Service {
+public:
+  /** Return the current liveness and delivery readiness state. */
+  grpc::Status Health(grpc::ServerContext* context, const runtime::HealthRequest* request,
+                      runtime::HealthResponse* response) override;
+};
+
+}  // namespace ros2_sdk
+
+#endif  // ROS2_SDK__RUNTIME_HEALTH_SERVICE_HPP_
