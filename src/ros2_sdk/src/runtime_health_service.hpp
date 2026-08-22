@@ -3,6 +3,8 @@
 
 #include <grpcpp/support/status.h>
 
+#include <functional>
+
 #include "runtime_health.grpc.pb.h"
 
 namespace ros2_sdk {
@@ -16,9 +18,16 @@ namespace ros2_sdk {
  */
 class RuntimeHealthService final : public runtime::RuntimeService::Service {
 public:
+  using ReadinessProvider = std::function<bool()>;
+
+  explicit RuntimeHealthService(ReadinessProvider readiness_provider = {});
+
   /** Return the current liveness and delivery readiness state. */
   grpc::Status Health(grpc::ServerContext* context, const runtime::HealthRequest* request,
                       runtime::HealthResponse* response) override;
+
+private:
+  ReadinessProvider readiness_provider_;
 };
 
 }  // namespace ros2_sdk

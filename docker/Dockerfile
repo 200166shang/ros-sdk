@@ -42,6 +42,7 @@ RUN apt-get update \
         ros-${ROS_DISTRO}-ament-cmake-gtest \
         ros-${ROS_DISTRO}-geometry-msgs \
         ros-${ROS_DISTRO}-nav-msgs \
+        ros-${ROS_DISTRO}-nav2-msgs \
         ros-${ROS_DISTRO}-rclcpp \
         ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
         ros-${ROS_DISTRO}-sensor-msgs \

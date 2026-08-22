@@ -7,7 +7,8 @@ import json
 import click
 import grpc
 
-from scripts.rosbridge_client import RuntimeClient
+from scripts.rosbridge_client import RuntimeClient, delivery_pb2
+from scripts.rosbridge_client.client import DeliveryStatus
 
 
 @click.group()
@@ -35,6 +36,49 @@ def health(address: str) -> None:
             ensure_ascii=False,
         )
     )
+
+
+@main.command("create-delivery")
+@click.option("--address", default="127.0.0.1:8765", show_default=True)
+@click.option("--request-id", required=True)
+@click.option("--pickup", required=True)
+@click.option("--dropoff", required=True)
+def create_delivery(address: str, request_id: str, pickup: str, dropoff: str) -> None:
+    """Create a delivery and print its immediate task snapshot."""
+    try:
+        with RuntimeClient(address) as runtime_client:
+            status = runtime_client.create_delivery(request_id, pickup, dropoff)
+    except grpc.RpcError as error:
+        raise click.ClickException(f"create delivery failed: {error.code().name}") from error
+
+    click.echo(json.dumps(_delivery_payload(status), ensure_ascii=False))
+
+
+@main.command("get-delivery")
+@click.option("--address", default="127.0.0.1:8765", show_default=True)
+@click.option("--task-id", required=True)
+def get_delivery(address: str, task_id: str) -> None:
+    """Print the latest delivery task snapshot."""
+    try:
+        with RuntimeClient(address) as runtime_client:
+            status = runtime_client.get_delivery(task_id)
+    except grpc.RpcError as error:
+        raise click.ClickException(f"get delivery failed: {error.code().name}") from error
+
+    click.echo(json.dumps(_delivery_payload(status), ensure_ascii=False))
+
+
+def _delivery_payload(status: DeliveryStatus) -> dict[str, object]:
+    """Convert a delivery status into stable CLI JSON fields."""
+    return {
+        "task_id": status.task_id,
+        "request_id": status.request_id,
+        "pickup_location": status.pickup_location,
+        "dropoff_location": status.dropoff_location,
+        "state": delivery_pb2.DeliveryState.Name(status.state),
+        "current_target": status.current_target,
+        "remaining_distance_m": status.remaining_distance_m,
+    }
 
 
 if __name__ == "__main__":
