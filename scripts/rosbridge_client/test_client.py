@@ -122,6 +122,26 @@ class RuntimeClientTests(unittest.TestCase):
         stub.ConfirmDropoff.assert_called_once()
         self.assertEqual(status.state, delivery_pb2.COMPLETED)
 
+    def test_cancel_delivery_maps_the_canceling_snapshot(self) -> None:
+        response = delivery_pb2.DeliverySnapshot(
+            task_id="task-1",
+            request_id="request-1",
+            pickup_location="pickup_a",
+            dropoff_location="dropoff_a",
+            state=delivery_pb2.CANCELING,
+            current_target="pickup_a",
+        )
+        stub = mock.Mock()
+        stub.CancelDelivery.return_value = response
+
+        with mock.patch.object(client.delivery_pb2_grpc, "DeliveryServiceStub", return_value=stub):
+            with client.RuntimeClient("127.0.0.1:8765") as runtime_client:
+                status = runtime_client.cancel_delivery("task-1")
+
+        stub.CancelDelivery.assert_called_once()
+        self.assertEqual(status.state, delivery_pb2.CANCELING)
+        self.assertEqual(status.current_target, "pickup_a")
+
 
 if __name__ == "__main__":
     unittest.main()

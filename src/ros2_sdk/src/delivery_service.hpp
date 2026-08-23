@@ -20,7 +20,7 @@ namespace ros2_sdk {
 /** The one business seam between delivery state and robot navigation. */
 class NavigationPort {
 public:
-  enum class Outcome { kSucceeded, kFailed };
+  enum class Outcome { kSucceeded, kFailed, kCanceled };
   using FeedbackCallback = std::function<void(double)>;
   using ResultCallback = std::function<void(Outcome)>;
 
@@ -29,6 +29,7 @@ public:
   virtual bool ready(std::chrono::milliseconds timeout) const = 0;
   virtual void navigate(const geometry_msgs::msg::PoseStamped& target,
                         FeedbackCallback feedback_callback, ResultCallback result_callback) = 0;
+  virtual void cancel() = 0;
 };
 
 class DeliveryService final :
@@ -57,6 +58,10 @@ public:
                               const delivery::ConfirmDeliveryRequest* request,
                               delivery::DeliverySnapshot* response) override;
 
+  grpc::Status CancelDelivery(grpc::ServerContext* context,
+                              const delivery::CancelDeliveryRequest* request,
+                              delivery::DeliverySnapshot* response) override;
+
 private:
   struct DeliveryTask {
     std::string task_id;
@@ -72,6 +77,7 @@ private:
       const std::string& location_name);
   static void fill_snapshot(const DeliveryTask& task, delivery::DeliverySnapshot* response);
   static bool is_terminal(delivery::DeliveryState state);
+  static bool is_navigating(delivery::DeliveryState state);
   static grpc::Status invalid_state(const char* reason);
 
   void start_navigation(const std::string& task_id, const geometry_msgs::msg::PoseStamped& target,

@@ -7,6 +7,7 @@ service DeliveryService {
   rpc GetDelivery(GetDeliveryRequest) returns (DeliverySnapshot);
   rpc ConfirmPickup(ConfirmDeliveryRequest) returns (DeliverySnapshot);
   rpc ConfirmDropoff(ConfirmDeliveryRequest) returns (DeliverySnapshot);
+  rpc CancelDelivery(CancelDeliveryRequest) returns (DeliverySnapshot);
 }
 
 message CreateDeliveryRequest {
@@ -23,6 +24,10 @@ message ConfirmDeliveryRequest {
   string task_id = 1;
 }
 
+message CancelDeliveryRequest {
+  string task_id = 1;
+}
+
 enum DeliveryState {
   DELIVERY_STATE_UNSPECIFIED = 0;
   STARTING = 1;
@@ -31,6 +36,9 @@ enum DeliveryState {
   NAVIGATING_TO_DROPOFF = 4;
   AWAITING_DROPOFF_CONFIRMATION = 5;
   COMPLETED = 6;
+  CANCELING = 7;
+  CANCELED = 8;
+  FAILED = 9;
 }
 
 message DeliverySnapshot {
