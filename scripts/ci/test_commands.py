@@ -1,4 +1,7 @@
+import contextlib
+import io
 import subprocess
+import traceback
 import unittest
 from unittest import mock
 
@@ -49,6 +52,47 @@ class CiCommandTests(unittest.TestCase):
                 "core.download:download_cache=/workspace/.cache/conan-download",
                 "--format=json",
                 "--out-file=/workspace/.cache/conan-spike/install-graph.json",
+            ],
+        )
+
+    def test_conan_install_command_requires_default_remote_in_strict_mode(self) -> None:
+        self.assertEqual(
+            commands.conan_install_command({"CONAN_REQUIRE_REMOTE": "true"}),
+            [
+                "conan",
+                "install",
+                ".",
+                "--lockfile=conan.lock",
+                "--output-folder=build",
+                "--build=missing",
+                "-s",
+                "build_type=Release",
+                "-s",
+                "compiler.cppstd=17",
+                "--remote=rosbridge",
+            ],
+        )
+
+    def test_conan_install_command_uses_configured_remote_in_strict_mode(self) -> None:
+        self.assertEqual(
+            commands.conan_install_command(
+                {
+                    "CONAN_REQUIRE_REMOTE": "TRUE",
+                    "CONAN_REMOTE_NAME": "private-conan",
+                }
+            ),
+            [
+                "conan",
+                "install",
+                ".",
+                "--lockfile=conan.lock",
+                "--output-folder=build",
+                "--build=missing",
+                "-s",
+                "build_type=Release",
+                "-s",
+                "compiler.cppstd=17",
+                "--remote=private-conan",
             ],
         )
 
@@ -109,24 +153,119 @@ class CiCommandTests(unittest.TestCase):
 
     @mock.patch.dict(
         commands.os.environ,
+        {
+            "CONAN_REQUIRE_REMOTE": "true",
+            "CONAN_REMOTE_URL": "https://conan.example.test",
+            "CONAN_LOGIN_USERNAME": "ci",
+            "CONAN_PASSWORD": "sentinel-password-must-not-leak",
+        },
+        clear=True,
+    )
+    @mock.patch.object(commands, "_try_run", return_value=True)
+    def test_strict_conan_remote_login_failure_hides_password(
+        self, try_run: mock.Mock
+    ) -> None:
+        def fail_login(command: list[str], **kwargs: object) -> None:
+            if command[1:3] == ["remote", "login"]:
+                raise subprocess.CalledProcessError(1, command)
+
+        with mock.patch.object(commands, "_run", side_effect=fail_login):
+            try:
+                commands._configure_conan_remote()
+            except RuntimeError as error:
+                formatted_traceback = traceback.format_exc()
+                self.assertIn("required remote setup failed", str(error).lower())
+            else:
+                self.fail("strict remote login failure did not raise RuntimeError")
+
+        self.assertNotIn("sentinel-password-must-not-leak", formatted_traceback)
+
+    @mock.patch.dict(
+        commands.os.environ,
         {"CONAN_BUILD_POLICY": "never"},
         clear=True,
     )
     @mock.patch.object(
-        commands,
-        "_run",
-        side_effect=subprocess.CalledProcessError(1, ["conan", "install"]),
+        commands.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess(
+            ["conan", "install"],
+            1,
+            stdout="",
+            stderr="ERROR: MiSsInG BiNaRy for the requested configuration\n",
+        ),
     )
     def test_never_policy_install_failure_requires_arm64_preparation(
         self, run: mock.Mock
     ) -> None:
-        with self.assertRaises(RuntimeError) as context:
-            commands._install_conan_dependencies()
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(RuntimeError) as context:
+                commands._install_conan_dependencies()
 
         message = str(context.exception)
         self.assertIn("ARM64 dependency preparation required", message)
         self.assertIn("server is unavailable", message)
         self.assertIn("exact package is missing", message)
+        self.assertEqual(
+            stderr.getvalue(),
+            "ERROR: MiSsInG BiNaRy for the requested configuration\n",
+        )
+
+    @mock.patch.dict(
+        commands.os.environ,
+        {"CONAN_BUILD_POLICY": "never"},
+        clear=True,
+    )
+    @mock.patch.object(
+        commands.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess(
+            ["conan", "install"],
+            1,
+            stdout="Conan install context\n",
+            stderr="ERROR: conan.lock is invalid\n",
+        ),
+    )
+    def test_never_policy_preserves_unrelated_install_failure(
+        self, run: mock.Mock
+    ) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            with self.assertRaises(subprocess.CalledProcessError) as context:
+                commands._install_conan_dependencies()
+
+        self.assertEqual(context.exception.output, "Conan install context\n")
+        self.assertEqual(context.exception.stderr, "ERROR: conan.lock is invalid\n")
+        self.assertNotIn(
+            "ARM64 dependency preparation required", str(context.exception)
+        )
+        self.assertEqual(stdout.getvalue(), "Conan install context\n")
+        self.assertEqual(stderr.getvalue(), "ERROR: conan.lock is invalid\n")
+
+    @mock.patch.dict(commands.os.environ, {}, clear=True)
+    @mock.patch.object(
+        commands.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess(
+            ["conan", "install"],
+            0,
+            stdout="Conan install complete\n",
+            stderr="Conan diagnostic\n",
+        ),
+    )
+    def test_conan_install_replays_success_output(
+        self, run: mock.Mock
+    ) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            commands._install_conan_dependencies()
+
+        self.assertEqual(stdout.getvalue(), "Conan install complete\n")
+        self.assertEqual(stderr.getvalue(), "Conan diagnostic\n")
 
     @mock.patch.dict(
         commands.os.environ,

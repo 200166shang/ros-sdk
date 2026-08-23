@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -68,6 +69,21 @@ def _try_run(command: Sequence[str]) -> bool:
         stderr=subprocess.PIPE,
         text=True,
     ).returncode == 0
+
+
+def _run_conan_install(command: Sequence[str]) -> None:
+    result = subprocess.run(
+        command,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    result.check_returncode()
 
 
 def _capture(command: Sequence[str]) -> str:
@@ -278,6 +294,10 @@ def conan_install_command(environ: Mapping[str, str] | None = None) -> list[str]
             raise ValueError("CONAN_GRAPH_FILE must be an absolute path")
         command.extend(["--format=json", f"--out-file={graph_file}"])
 
+    if _env_flag("CONAN_REQUIRE_REMOTE", environment):
+        remote_name = environment.get("CONAN_REMOTE_NAME", "rosbridge")
+        command.append(f"--remote={remote_name}")
+
     return command
 
 
@@ -314,10 +334,10 @@ def _configure_conan_remote() -> None:
         else:
             _try_run(["conan", "remote", "disable", remote_name])
             print("Conan remote unavailable or unauthenticated; using fallback")
-    except subprocess.CalledProcessError as error:
+    except subprocess.CalledProcessError:
         _try_run(["conan", "remote", "disable", remote_name])
         if require_remote:
-            raise RuntimeError("Conan remote setup failed") from error
+            raise RuntimeError("Conan required remote setup failed") from None
         print("Conan remote unavailable or unauthenticated; using fallback")
 
 
@@ -325,9 +345,10 @@ def _install_conan_dependencies() -> None:
     """Install Conan dependencies and explain strict cache misses."""
     command = conan_install_command()
     try:
-        _run(command)
+        _run_conan_install(command)
     except subprocess.CalledProcessError as error:
-        if "--build=never" in command:
+        diagnostics = f"{error.output or ''}\n{error.stderr or ''}"
+        if "--build=never" in command and "missing binary" in diagnostics.lower():
             raise RuntimeError(
                 "ARM64 dependency preparation required: the server is unavailable or "
                 "the exact package is missing"
