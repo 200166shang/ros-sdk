@@ -32,6 +32,17 @@ class DeliveryStatus:
     state: int
     current_target: str
     remaining_distance_m: float | None
+    failure_code: str = ""
+    failure_reason: str = ""
+
+
+class DeliveryError(RuntimeError):
+    """Stable domain error returned when a delivery request is rejected."""
+
+    def __init__(self, error_code: str, message: str) -> None:
+        super().__init__(f"{error_code}: {message}")
+        self.error_code = error_code
+        self.message = message
 
 
 class RuntimeClient:
@@ -59,14 +70,22 @@ class RuntimeClient:
         self, request_id: str, pickup_location: str, dropoff_location: str
     ) -> DeliveryStatus:
         """Create a delivery and return its immediate task snapshot."""
-        response = self._delivery_stub.CreateDelivery(
-            delivery_pb2.CreateDeliveryRequest(
-                request_id=request_id,
-                pickup_location=pickup_location,
-                dropoff_location=dropoff_location,
-            ),
-            timeout=self._timeout_seconds,
-        )
+        try:
+            response = self._delivery_stub.CreateDelivery(
+                delivery_pb2.CreateDeliveryRequest(
+                    request_id=request_id,
+                    pickup_location=pickup_location,
+                    dropoff_location=dropoff_location,
+                ),
+                timeout=self._timeout_seconds,
+            )
+        except grpc.RpcError as error:
+            details = error.details() or error.code().name
+            if ":" in details:
+                error_code, message = details.split(":", 1)
+            else:
+                error_code, message = error.code().name, details
+            raise DeliveryError(error_code, message.strip()) from error
         return self._to_delivery_status(response)
 
     def get_delivery(self, task_id: str) -> DeliveryStatus:
@@ -116,6 +135,8 @@ class RuntimeClient:
             state=response.state,
             current_target=response.current_target,
             remaining_distance_m=remaining_distance_m,
+            failure_code=response.failure_code,
+            failure_reason=response.failure_reason,
         )
 
     def close(self) -> None:

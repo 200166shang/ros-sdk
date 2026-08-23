@@ -8,7 +8,7 @@ import click
 import grpc
 
 from scripts.rosbridge_client import RuntimeClient, delivery_pb2
-from scripts.rosbridge_client.client import DeliveryStatus
+from scripts.rosbridge_client.client import DeliveryError, DeliveryStatus
 
 
 @click.group()
@@ -48,6 +48,8 @@ def create_delivery(address: str, request_id: str, pickup: str, dropoff: str) ->
     try:
         with RuntimeClient(address) as runtime_client:
             status = runtime_client.create_delivery(request_id, pickup, dropoff)
+    except DeliveryError as error:
+        raise click.ClickException(f"create delivery failed: {error}") from error
     except grpc.RpcError as error:
         raise click.ClickException(f"create delivery failed: {error.code().name}") from error
 
@@ -120,6 +122,8 @@ def _delivery_payload(status: DeliveryStatus) -> dict[str, object]:
         "state": delivery_pb2.DeliveryState.Name(status.state),
         "current_target": status.current_target,
         "remaining_distance_m": status.remaining_distance_m,
+        "failure_code": status.failure_code,
+        "failure_reason": status.failure_reason,
     }
 
 

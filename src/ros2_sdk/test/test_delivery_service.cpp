@@ -15,7 +15,9 @@ namespace delivery = ros2_sdk::delivery;
 
 class FakeNavigation final : public ros2_sdk::NavigationPort {
 public:
-  bool ready(std::chrono::milliseconds /*timeout*/) const override { return true; }
+  bool ready(std::chrono::milliseconds /*timeout*/) const override { return ready_; }
+
+  void set_ready(bool ready) { ready_ = ready; }
 
   void navigate(const geometry_msgs::msg::PoseStamped& target,
                 FeedbackCallback /*feedback_callback*/, ResultCallback result_callback) override {
@@ -42,9 +44,24 @@ public:
     result_callback(NavigationPort::Outcome::kCanceled);
   }
 
+  void fail() {
+    ASSERT_TRUE(static_cast<bool>(result_callback_));
+    const auto result_callback = result_callback_;
+    result_callback_ = {};
+    result_callback(NavigationPort::Outcome::kFailed);
+  }
+
+  void timeout() {
+    ASSERT_TRUE(static_cast<bool>(result_callback_));
+    const auto result_callback = result_callback_;
+    result_callback_ = {};
+    result_callback(NavigationPort::Outcome::kTimedOut);
+  }
+
   std::vector<geometry_msgs::msg::PoseStamped> targets;
 
 private:
+  bool ready_{true};
   ResultCallback result_callback_;
   std::size_t cancel_count_{0};
 };
@@ -339,6 +356,74 @@ TEST(DeliveryServiceTest, AcceptsAtMostOneConcurrentDeliveryCreation) {
   EXPECT_EQ(navigation->navigation_count(), 1U);
   EXPECT_TRUE(first_succeeded ? second_status.error_code() == grpc::StatusCode::RESOURCE_EXHAUSTED
                               : first_status.error_code() == grpc::StatusCode::RESOURCE_EXHAUSTED);
+}
+
+TEST(DeliveryServiceTest, RejectsCreationWhenNavigationIsNotReady) {
+  auto navigation = std::make_shared<FakeNavigation>();
+  navigation->set_ready(false);
+  auto service = std::make_shared<ros2_sdk::DeliveryService>(navigation);
+
+  auto request = make_create_request("not-ready", "pickup_a", "dropoff_a");
+  delivery::DeliverySnapshot snapshot;
+  const grpc::Status status = service->CreateDelivery(nullptr, &request, &snapshot);
+
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
+  EXPECT_EQ(status.error_message(), "NOT_READY: delivery navigation capability is not ready");
+  EXPECT_EQ(navigation->navigation_count(), 0U);
+
+  delivery::GetDeliveryRequest get_request;
+  get_request.set_task_id("task-1");
+  EXPECT_EQ(service->GetDelivery(nullptr, &get_request, &snapshot).error_code(),
+            grpc::StatusCode::NOT_FOUND);
+}
+
+TEST(DeliveryServiceTest, RecordsUnreachableFailureForAnAcceptedDelivery) {
+  auto navigation = std::make_shared<FakeNavigation>();
+  auto service = std::make_shared<ros2_sdk::DeliveryService>(navigation);
+
+  auto request = make_create_request("unreachable", "pickup_a", "dropoff_a");
+  delivery::DeliverySnapshot snapshot;
+  ASSERT_TRUE(service->CreateDelivery(nullptr, &request, &snapshot).ok());
+  navigation->fail();
+
+  delivery::GetDeliveryRequest get_request;
+  get_request.set_task_id(snapshot.task_id());
+  ASSERT_TRUE(service->GetDelivery(nullptr, &get_request, &snapshot).ok());
+  EXPECT_EQ(snapshot.state(), delivery::FAILED);
+  EXPECT_EQ(snapshot.failure_code(), "UNREACHABLE");
+  EXPECT_EQ(snapshot.failure_reason(), "navigation goal did not succeed");
+}
+
+TEST(DeliveryServiceTest, RecordsTimeoutFailureForAnAcceptedDelivery) {
+  auto navigation = std::make_shared<FakeNavigation>();
+  auto service = std::make_shared<ros2_sdk::DeliveryService>(navigation);
+
+  auto request = make_create_request("timeout", "pickup_a", "dropoff_a");
+  delivery::DeliverySnapshot snapshot;
+  ASSERT_TRUE(service->CreateDelivery(nullptr, &request, &snapshot).ok());
+  navigation->timeout();
+
+  delivery::GetDeliveryRequest get_request;
+  get_request.set_task_id(snapshot.task_id());
+  ASSERT_TRUE(service->GetDelivery(nullptr, &get_request, &snapshot).ok());
+  EXPECT_EQ(snapshot.state(), delivery::FAILED);
+  EXPECT_EQ(snapshot.failure_code(), "NAVIGATION_TIMEOUT");
+  EXPECT_EQ(snapshot.failure_reason(), "navigation exceeded the 30 second time limit");
+}
+
+TEST(DeliveryServiceTest, AllowsANewRequestAfterAnUnreachableDeliveryFails) {
+  auto navigation = std::make_shared<FakeNavigation>();
+  auto service = std::make_shared<ros2_sdk::DeliveryService>(navigation);
+
+  auto first_request = make_create_request("failed", "pickup_a", "dropoff_a");
+  delivery::DeliverySnapshot snapshot;
+  ASSERT_TRUE(service->CreateDelivery(nullptr, &first_request, &snapshot).ok());
+  navigation->fail();
+
+  auto second_request = make_create_request("recovery-request", "pickup_a", "dropoff_a");
+  ASSERT_TRUE(service->CreateDelivery(nullptr, &second_request, &snapshot).ok());
+  EXPECT_NE(snapshot.task_id(), "task-1");
+  EXPECT_EQ(navigation->navigation_count(), 2U);
 }
 
 }  // namespace

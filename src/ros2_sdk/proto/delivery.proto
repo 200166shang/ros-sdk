@@ -49,4 +49,6 @@ message DeliverySnapshot {
   DeliveryState state = 5;
   string current_target = 6;
   optional double remaining_distance_m = 7;
+  string failure_code = 8;
+  string failure_reason = 9;
 }
