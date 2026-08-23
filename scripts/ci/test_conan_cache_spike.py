@@ -652,6 +652,22 @@ class ConanCacheSpikeTests(unittest.TestCase):
                         spike.main(arguments)
                     self.assertFalse(output.exists())
 
+    def test_report_redacts_symlink_loop_resolution_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sentinel = "sentinel-private-resolution-path"
+            output = root / sentinel
+            peer = root / "resolution-peer"
+            output.symlink_to(peer.name)
+            peer.symlink_to(output.name)
+            arguments = self._report_arguments(root, output=output)
+
+            with self.assertRaisesRegex(RuntimeError, "destinations") as context:
+                spike.main(arguments)
+
+            self.assertNotIn(sentinel, str(context.exception))
+            self.assertFalse((root / "summary.md").exists())
+
     def test_json_writer_rejects_nonfinite_values(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "result.json"

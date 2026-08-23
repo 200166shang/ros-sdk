@@ -447,7 +447,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             raise RuntimeError("report role and cache-hit combination is invalid")
         try:
             destinations_alias = args.output.resolve() == args.summary.resolve()
-        except OSError:
+        except (OSError, RuntimeError):
             raise RuntimeError("report destinations are invalid") from None
         if destinations_alias:
             raise RuntimeError("report destinations must be distinct")
