@@ -1,0 +1,245 @@
+name: Conan Download Cache Spike
+
+on:
+  push:
+    branches:
+      - prototype/conan-download-cache
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: conan-download-cache-spike
+  cancel-in-progress: false
+
+env:
+  CI_IMAGE: ghcr.io/200166shang/ros-sdk:ci-arm64-main
+  COMPOSE_PROJECT_NAME: conan-download-cache-spike
+  COMPOSE_SERVICE: ros2
+  COMPOSE_NO_DEPS: "true"
+  CONAN_REMOTE_NAME: rosbridge
+  CONAN_REMOTE_URL: http://106.55.24.85:9300
+  CONAN_LOGIN_USERNAME: ci-reader
+  CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
+  CONAN_DOWNLOAD_CACHE: /workspace/.cache/conan-download
+  CONAN_BUILD_POLICY: never
+  CONAN_REQUIRE_REMOTE: "true"
+  CONAN_GRAPH_FILE: /workspace/.cache/conan-spike/install-graph.json
+  CACHE_GENERATION: v1
+  SAMPLE_ROLE: baseline
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
+
+jobs:
+  measure:
+    name: Measure Conan download cache
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - name: Record job start
+        run: echo "SPIKE_JOB_START_MS=$(date +%s%3N)" >> "$GITHUB_ENV"
+
+      - name: Check out the prototype
+        uses: actions/checkout@v4
+
+      - name: Create measurement directories
+        run: mkdir -p .cache/conan-download .cache/conan-spike
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the existing CI image
+        shell: bash
+        run: |
+          for attempt in 1 2; do
+            if docker pull "$CI_IMAGE" >/dev/null; then
+              echo "ROSBRIDGE_IMAGE=$CI_IMAGE" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            if [[ "$attempt" == "2" ]]; then
+              echo "Unable to pull the existing ARM64 CI image" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Start only the ROS 2 service
+        run: python3 -m scripts.ci compose-up
+
+      - name: Verify ARM64 build environment
+        run: python3 -m scripts.ci verify-arm64
+
+      - name: Calculate environment fingerprint
+        id: fingerprint
+        shell: bash
+        run: |
+          image_digests=$(docker image inspect "$ROSBRIDGE_IMAGE" \
+            --format '{{range .RepoDigests}}{{println .}}{{end}}' | LC_ALL=C sort)
+          if [[ -z "$image_digests" ]]; then
+            echo "Pulled image has no immutable digest" >&2
+            exit 1
+          fi
+
+          fingerprint=$(
+            {
+              docker exec ros2 conan --version
+              docker exec ros2 gcc --version
+              docker exec ros2 conan profile show -pr:h default \
+                -s:h build_type=Release -s:h compiler.cppstd=17
+              printf '%s\n' "$image_digests"
+              for input in conanfile.txt conan.lock docker/Dockerfile; do
+                if [[ -f "$input" ]]; then
+                  printf '%s=' "$input"
+                  sha256sum "$input" | cut -d' ' -f1
+                else
+                  printf '%s=absent\n' "$input"
+                fi
+              done
+            } | sha256sum | cut -d' ' -f1
+          )
+          if [[ ! "$fingerprint" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Environment fingerprint is invalid" >&2
+            exit 1
+          fi
+          echo "value=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - name: Record cache restore start
+        run: date +%s%3N > .cache/conan-spike/restore-start-ms
+
+      - name: Restore Conan download cache
+        id: conan-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/conan-download
+          key: rosbridge-conan-download-${{ runner.arch }}-${{ steps.fingerprint.outputs.value }}-${{ env.CACHE_GENERATION }}
+
+      - name: Measure cache restore
+        id: restore-timing
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import time
+          from pathlib import Path
+
+          started = int(Path(".cache/conan-spike/restore-start-ms").read_text())
+          seconds = (time.time_ns() // 1_000_000 - started) / 1000
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"seconds={seconds:.3f}\n")
+          PY
+
+      - name: Verify required Conan remote
+        run: python3 -m scripts.ci verify-conan
+
+      - name: Install dependencies and build
+        id: build-timing
+        shell: bash
+        run: |
+          started=$(date +%s%3N)
+          set +e
+          set -o pipefail
+          ./rb build --clean 2>&1 | tee .cache/conan-spike/build.log >/dev/null
+          status=${PIPESTATUS[0]}
+          set -e
+          ended=$(date +%s%3N)
+          python3 - "$started" "$ended" <<'PY'
+          import os
+          import sys
+
+          seconds = (int(sys.argv[2]) - int(sys.argv[1])) / 1000
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"seconds={seconds:.3f}\n")
+          PY
+          exit "$status"
+
+      - name: Validate and collect sample
+        run: |
+          python3 -m scripts.ci.conan_cache_spike collect \
+            --cache-dir .cache/conan-download \
+            --graph-file .cache/conan-spike/install-graph.json \
+            --build-log .cache/conan-spike/build.log \
+            --build-total-seconds '${{ steps.build-timing.outputs.seconds }}' \
+            --output .cache/conan-spike/collected.json
+
+      - name: Record cache save start
+        if: success() && steps.conan-cache.outputs.cache-hit != 'true'
+        run: date +%s%3N > .cache/conan-spike/save-start-ms
+
+      - name: Save Conan download cache
+        if: success() && steps.conan-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/conan-download
+          key: rosbridge-conan-download-${{ runner.arch }}-${{ steps.fingerprint.outputs.value }}-${{ env.CACHE_GENERATION }}
+
+      - name: Measure cache save
+        id: save-timing
+        if: success() && steps.conan-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import time
+          from pathlib import Path
+
+          started = int(Path(".cache/conan-spike/save-start-ms").read_text())
+          seconds = (time.time_ns() // 1_000_000 - started) / 1000
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"seconds={seconds:.3f}\n")
+          PY
+
+      - name: Write result and job summary
+        env:
+          CACHE_HIT: ${{ steps.conan-cache.outputs.cache-hit == 'true' }}
+          RESTORE_SECONDS: ${{ steps.restore-timing.outputs.seconds }}
+          SAVE_SECONDS: ${{ steps.save-timing.outputs.seconds || '0' }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.value }}
+        shell: bash
+        run: |
+          ended=$(date +%s%3N)
+          job_seconds=$(python3 - "$SPIKE_JOB_START_MS" "$ended" <<'PY'
+          import sys
+
+          print(f"{(int(sys.argv[2]) - int(sys.argv[1])) / 1000:.3f}")
+          PY
+          )
+          python3 -m scripts.ci.conan_cache_spike report \
+            --collected .cache/conan-spike/collected.json \
+            --output .cache/conan-spike/result.json \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --role "$SAMPLE_ROLE" \
+            --cache-hit "$CACHE_HIT" \
+            --restore-seconds "$RESTORE_SECONDS" \
+            --save-seconds "$SAVE_SECONDS" \
+            --job-total-seconds "$job_seconds" \
+            --generation "$CACHE_GENERATION" \
+            --fingerprint "$FINGERPRINT" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --sha "$GITHUB_SHA"
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: conan-cache-spike-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/conan-spike/result.json
+          retention-days: 7
+
+      - name: Upload diagnostics after failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conan-cache-spike-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/conan-spike/build.log
+            log/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop the ROS 2 service
+        if: always()
+        run: python3 -m scripts.ci compose-down
