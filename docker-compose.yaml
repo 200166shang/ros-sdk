@@ -31,6 +31,11 @@ services:
       CONAN_REMOTE_URL: ${CONAN_REMOTE_URL:-}
       CONAN_LOGIN_USERNAME: ${CONAN_LOGIN_USERNAME:-}
       CONAN_PASSWORD: ${CONAN_PASSWORD:-}
+      # Opt-in CI experiment controls. Empty/default values preserve local behavior.
+      CONAN_DOWNLOAD_CACHE: ${CONAN_DOWNLOAD_CACHE:-}
+      CONAN_BUILD_POLICY: ${CONAN_BUILD_POLICY:-missing}
+      CONAN_REQUIRE_REMOTE: ${CONAN_REQUIRE_REMOTE:-false}
+      CONAN_GRAPH_FILE: ${CONAN_GRAPH_FILE:-}
     ports:
       - "8080:8080" # HTTP gateway
       - "9090:9090" # WebSocket
