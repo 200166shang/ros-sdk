@@ -33,30 +33,35 @@ COLLECTED_FIELDS = (
 TIMING_PATTERN = re.compile(
     r"^Conan install elapsed: ([0-9]+(?:\.[0-9]+)?)s$", re.MULTILINE
 )
+GRAPH_DIGEST_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
+SAFE_METADATA_PATTERN = re.compile(r"[A-Za-z0-9]+")
 
 
 def _regular_cache_files(cache_dir: Path) -> list[Path]:
     """Return validated regular cache files without following symlinks."""
-    if cache_dir.is_symlink():
-        raise RuntimeError("download cache directory is a symlink")
-    if not cache_dir.is_dir():
-        raise RuntimeError(f"download cache is not a directory: {cache_dir}")
+    try:
+        if cache_dir.is_symlink():
+            raise RuntimeError("download cache contains a symlink")
+        if not cache_dir.is_dir():
+            raise RuntimeError("download cache is not a directory")
 
-    files: list[Path] = []
-    pending = [cache_dir]
-    while pending:
-        directory = pending.pop()
-        for path in directory.iterdir():
-            if path.is_symlink():
-                raise RuntimeError(f"download cache contains symlink: {path}")
-            if path.is_dir():
-                pending.append(path)
-            elif path.is_file():
-                if path.name.casefold() in FORBIDDEN_NAMES:
-                    raise RuntimeError(
-                        f"download cache contains forbidden file: {path.name}"
-                    )
-                files.append(path)
+        files: list[Path] = []
+        pending = [cache_dir]
+        while pending:
+            directory = pending.pop()
+            for path in directory.iterdir():
+                if path.is_symlink():
+                    raise RuntimeError("download cache contains a symlink")
+                if path.is_dir():
+                    pending.append(path)
+                elif path.is_file():
+                    if path.name.casefold() in FORBIDDEN_NAMES:
+                        raise RuntimeError(
+                            "download cache contains forbidden configuration"
+                        )
+                    files.append(path)
+    except OSError:
+        raise RuntimeError("download cache could not be validated") from None
 
     if not files:
         raise RuntimeError("download cache contains no regular files")
@@ -68,8 +73,8 @@ def _graph_identity(graph_file: Path) -> tuple[str, int]:
     try:
         payload = json.loads(graph_file.read_text(encoding="utf-8"))
         nodes = payload["graph"]["nodes"]
-    except (KeyError, TypeError, json.JSONDecodeError) as error:
-        raise RuntimeError("Conan graph JSON does not contain graph.nodes") from error
+    except (KeyError, OSError, TypeError, UnicodeError, json.JSONDecodeError):
+        raise RuntimeError("Conan graph JSON is invalid") from None
     if not isinstance(nodes, Mapping):
         raise RuntimeError("Conan graph JSON graph.nodes must be an object")
 
@@ -92,22 +97,64 @@ def _graph_identity(graph_file: Path) -> tuple[str, int]:
             f"Conan attempted source builds for {source_build_count} {noun}"
         )
 
-    packages.sort(
-        key=lambda package: json.dumps(
-            package, sort_keys=True, separators=(",", ":")
+    try:
+        packages.sort(
+            key=lambda package: json.dumps(
+                package, allow_nan=False, sort_keys=True, separators=(",", ":")
+            )
         )
-    )
-    canonical = json.dumps(packages, sort_keys=True, separators=(",", ":"))
+        canonical = json.dumps(
+            packages, allow_nan=False, sort_keys=True, separators=(",", ":")
+        )
+    except (TypeError, ValueError):
+        raise RuntimeError("Conan graph JSON is invalid") from None
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return digest, len(packages)
 
 
 def _conan_install_seconds(build_log: Path) -> float:
     """Extract the single exact Conan install timing line from a build log."""
-    matches = TIMING_PATTERN.findall(build_log.read_text(encoding="utf-8"))
+    try:
+        log_text = build_log.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        raise RuntimeError("build log timing evidence is invalid") from None
+    matches = TIMING_PATTERN.findall(log_text)
     if len(matches) != 1:
         raise RuntimeError("build log does not contain exactly one Conan install timing line")
-    return float(matches[0])
+    return _nonnegative_finite_timing(float(matches[0]))
+
+
+def _nonnegative_finite_timing(value: Any) -> float:
+    """Return a finite nonnegative timing or reject the evidence."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RuntimeError("Spike evidence contains an invalid timing")
+    timing = float(value)
+    if not math.isfinite(timing) or timing < 0.0:
+        raise RuntimeError("Spike evidence contains an invalid timing")
+    return timing
+
+
+def _nonnegative_integer(value: Any) -> int:
+    """Return a nonnegative integer or reject the evidence."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeError("Spike evidence contains an invalid count")
+    return value
+
+
+def _safe_metadata_token(value: Any) -> str:
+    """Return a Markdown-safe, single-line metadata token."""
+    if not isinstance(value, str) or SAFE_METADATA_PATTERN.fullmatch(value) is None:
+        raise RuntimeError("report metadata contains an invalid token")
+    return value
+
+
+def _timing_argument(value: Any) -> float:
+    """Parse an untrusted CLI timing without echoing its source text."""
+    try:
+        timing = float(value)
+    except (TypeError, ValueError):
+        raise RuntimeError("Spike evidence contains an invalid timing") from None
+    return _nonnegative_finite_timing(timing)
 
 
 def collect(
@@ -117,6 +164,7 @@ def collect(
     build_total_seconds: float,
 ) -> dict[str, Any]:
     """Validate one sample and return credential-free cache/build measurements."""
+    total_seconds = _nonnegative_finite_timing(build_total_seconds)
     files = _regular_cache_files(cache_dir)
     graph_digest, package_count = _graph_identity(graph_file)
     conan_seconds = _conan_install_seconds(build_log)
@@ -126,20 +174,9 @@ def collect(
         "conan_install_seconds": conan_seconds,
         "graph_digest": graph_digest,
         "package_count": package_count,
-        "project_build_seconds": max(0.0, build_total_seconds - conan_seconds),
+        "project_build_seconds": max(0.0, total_seconds - conan_seconds),
         "source_builds": [],
     }
-
-
-def _finite_number(result: Mapping[str, Any], field: str) -> float:
-    """Read one finite numeric result field or reject the sample."""
-    value = result.get(field)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise RuntimeError(f"Spike sample has invalid {field}")
-    numeric = float(value)
-    if not math.isfinite(numeric):
-        raise RuntimeError(f"Spike sample has invalid {field}")
-    return numeric
 
 
 def _validate_result(result: Any) -> Mapping[str, Any]:
@@ -150,16 +187,18 @@ def _validate_result(result: Any) -> Mapping[str, Any]:
         raise RuntimeError("malformed Spike sample matrix: unknown role")
     if type(result.get("cache_hit")) is not bool:
         raise RuntimeError("malformed Spike sample matrix: cache_hit must be boolean")
-    if not isinstance(result.get("graph_digest"), str) or not result["graph_digest"]:
+    if (
+        not isinstance(result.get("graph_digest"), str)
+        or GRAPH_DIGEST_PATTERN.fullmatch(result["graph_digest"]) is None
+    ):
         raise RuntimeError("Spike sample has invalid graph digest")
     if "source_builds" not in result or not isinstance(result["source_builds"], list):
         raise RuntimeError("Spike sample has invalid source_builds")
 
-    restore = _finite_number(result, "restore_seconds")
-    install = _finite_number(result, "conan_install_seconds")
+    restore = _nonnegative_finite_timing(result.get("restore_seconds"))
+    install = _nonnegative_finite_timing(result.get("conan_install_seconds"))
+    _nonnegative_finite_timing(restore + install)
     cache_bytes = result.get("cache_bytes")
-    if restore < 0.0 or install < 0.0:
-        raise RuntimeError("Spike sample timings must be nonnegative")
     if isinstance(cache_bytes, bool) or not isinstance(cache_bytes, int) or cache_bytes < 0:
         raise RuntimeError("Spike sample has invalid cache_bytes")
     return result
@@ -200,34 +239,43 @@ def compare_results(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     if any(result["source_builds"] for result in samples):
         raise RuntimeError("source builds occurred in a Spike sample")
 
-    cold_prep = _finite_number(cold[0], "restore_seconds") + _finite_number(
-        cold[0], "conan_install_seconds"
+    cold_prep = _nonnegative_finite_timing(
+        _nonnegative_finite_timing(cold[0]["restore_seconds"])
+        + _nonnegative_finite_timing(cold[0]["conan_install_seconds"])
     )
-    if cold_prep <= 0.0:
+    cold_prep_published = round(cold_prep, 3)
+    if cold_prep_published <= 0.0:
         raise RuntimeError("Cold dependency preparation must be positive")
-    warm_preps = [
-        _finite_number(result, "restore_seconds")
-        + _finite_number(result, "conan_install_seconds")
+    warm_preps_raw = [
+        _nonnegative_finite_timing(
+            _nonnegative_finite_timing(result["restore_seconds"])
+            + _nonnegative_finite_timing(result["conan_install_seconds"])
+        )
         for result in warm
     ]
-    warm_median = statistics.median(warm_preps)
-    warm_max = max(warm_preps)
-    improvement = 100.0 * (1.0 - warm_median / cold_prep)
+    warm_preps_published = [round(value, 3) for value in warm_preps_raw]
+    warm_median_published = round(statistics.median(warm_preps_published), 3)
+    warm_max_published = round(max(warm_preps_published), 3)
+    improvement_published = round(
+        100.0 * (1.0 - warm_median_published / cold_prep_published), 1
+    )
+    if not math.isfinite(improvement_published):
+        raise RuntimeError("Spike comparison produced an invalid timing metric")
     largest_cache = max(int(result["cache_bytes"]) for result in samples)
 
     reject_reasons: list[str] = []
     investigate_reasons: list[str] = []
-    if improvement < 70.0:
+    if improvement_published < 70.0:
         reject_reasons.append("warm median improvement is below 70%")
     if largest_cache > 2 * GIB:
         reject_reasons.append("download cache exceeds 2 GiB")
     elif largest_cache > GIB:
         investigate_reasons.append("download cache exceeds the preferred 1 GiB")
-    if warm_median > 45.0:
+    if warm_median_published > 45.0:
         investigate_reasons.append(
             "warm median exceeds the preferred 45-second budget"
         )
-    if warm_max > 60.0:
+    if warm_max_published > 60.0:
         investigate_reasons.append(
             "at least one Warm sample exceeds the 60-second observation line"
         )
@@ -244,11 +292,11 @@ def compare_results(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "decision": decision,
-        "improvement_percent": round(improvement, 1),
-        "cold_prep_seconds": round(cold_prep, 3),
-        "warm_prep_seconds": [round(value, 3) for value in warm_preps],
-        "warm_median_seconds": round(warm_median, 3),
-        "warm_max_seconds": round(warm_max, 3),
+        "improvement_percent": improvement_published,
+        "cold_prep_seconds": cold_prep_published,
+        "warm_prep_seconds": warm_preps_published,
+        "warm_median_seconds": warm_median_published,
+        "warm_max_seconds": warm_max_published,
         "largest_cache_bytes": largest_cache,
         "graph_digest": str(samples[0]["graph_digest"]),
         "reasons": reasons,
@@ -257,23 +305,52 @@ def compare_results(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
 def _safe_collected_result(path: Path) -> dict[str, Any]:
     """Load only collector fields approved for publication."""
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise RuntimeError("collected result has an invalid schema") from None
     if not isinstance(payload, Mapping):
-        raise RuntimeError("collected result must be a JSON object")
+        raise RuntimeError("collected result has an invalid schema")
     missing = [field for field in COLLECTED_FIELDS if field not in payload]
     if missing:
-        raise RuntimeError(f"collected result is missing fields: {', '.join(missing)}")
-    result = {field: payload[field] for field in COLLECTED_FIELDS}
-    if result["source_builds"] != []:
-        raise RuntimeError("collected result contains source builds")
-    return result
+        raise RuntimeError("collected result has an invalid schema")
+    try:
+        cache_bytes = _nonnegative_integer(payload["cache_bytes"])
+        cache_files = _nonnegative_integer(payload["cache_files"])
+        package_count = _nonnegative_integer(payload["package_count"])
+        conan_seconds = _nonnegative_finite_timing(
+            payload["conan_install_seconds"]
+        )
+        project_seconds = _nonnegative_finite_timing(
+            payload["project_build_seconds"]
+        )
+    except RuntimeError:
+        raise RuntimeError("collected result has an invalid schema") from None
+    graph_digest = payload["graph_digest"]
+    if (
+        not isinstance(graph_digest, str)
+        or GRAPH_DIGEST_PATTERN.fullmatch(graph_digest) is None
+        or payload["source_builds"] != []
+    ):
+        raise RuntimeError("collected result has an invalid schema")
+    return {
+        "cache_bytes": cache_bytes,
+        "cache_files": cache_files,
+        "conan_install_seconds": conan_seconds,
+        "graph_digest": graph_digest,
+        "package_count": package_count,
+        "project_build_seconds": project_seconds,
+        "source_builds": [],
+    }
 
 
 def _write_json(payload: Mapping[str, Any], destination: Path) -> None:
     """Write deterministic pretty JSON with a trailing newline."""
-    destination.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    rendered = json.dumps(payload, allow_nan=False, indent=2, sort_keys=True) + "\n"
+    try:
+        destination.write_text(rendered, encoding="utf-8")
+    except OSError:
+        raise RuntimeError("result JSON could not be written") from None
 
 
 def write_summary(result: Mapping[str, Any], destination: Path) -> None:
@@ -305,7 +382,10 @@ def write_summary(result: Mapping[str, Any], destination: Path) -> None:
         "Three Warm samples are directional evidence only; production P95 requires at "
         "least 20 comparable successful shadow runs.",
     ]
-    destination.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    try:
+        destination.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    except OSError:
+        raise RuntimeError("result summary could not be written") from None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -319,22 +399,18 @@ def _parser() -> argparse.ArgumentParser:
     collect_parser.add_argument("--cache-dir", type=Path, required=True)
     collect_parser.add_argument("--graph-file", type=Path, required=True)
     collect_parser.add_argument("--build-log", type=Path, required=True)
-    collect_parser.add_argument("--build-total-seconds", type=float, required=True)
+    collect_parser.add_argument("--build-total-seconds", required=True)
     collect_parser.add_argument("--output", type=Path, required=True)
 
     report_parser = subparsers.add_parser("report")
     report_parser.add_argument("--collected", type=Path, required=True)
     report_parser.add_argument("--output", type=Path, required=True)
     report_parser.add_argument("--summary", type=Path, required=True)
-    report_parser.add_argument(
-        "--role", choices=("baseline", "recovery"), required=True
-    )
-    report_parser.add_argument(
-        "--cache-hit", choices=("true", "false"), required=True
-    )
-    report_parser.add_argument("--restore-seconds", type=float, required=True)
-    report_parser.add_argument("--save-seconds", type=float, required=True)
-    report_parser.add_argument("--job-total-seconds", type=float, required=True)
+    report_parser.add_argument("--role", required=True)
+    report_parser.add_argument("--cache-hit", required=True)
+    report_parser.add_argument("--restore-seconds", required=True)
+    report_parser.add_argument("--save-seconds", required=True)
+    report_parser.add_argument("--job-total-seconds", required=True)
     report_parser.add_argument("--generation", required=True)
     report_parser.add_argument("--fingerprint", required=True)
     report_parser.add_argument("--run-id", required=True)
@@ -355,33 +431,60 @@ def main(argv: Sequence[str] | None = None) -> None:
             args.cache_dir,
             args.graph_file,
             args.build_log,
-            args.build_total_seconds,
+            _timing_argument(args.build_total_seconds),
         )
         _write_json(result, args.output)
         return
 
     if args.command == "report":
+        if args.role not in ("baseline", "recovery") or args.cache_hit not in (
+            "true",
+            "false",
+        ):
+            raise RuntimeError("report role or cache-hit value is invalid")
+        cache_hit = args.cache_hit == "true"
+        if args.role == "recovery" and cache_hit:
+            raise RuntimeError("report role and cache-hit combination is invalid")
+        try:
+            destinations_alias = args.output.resolve() == args.summary.resolve()
+        except OSError:
+            raise RuntimeError("report destinations are invalid") from None
+        if destinations_alias:
+            raise RuntimeError("report destinations must be distinct")
         result = _safe_collected_result(args.collected)
+        restore_seconds = _timing_argument(args.restore_seconds)
+        save_seconds = _timing_argument(args.save_seconds)
+        job_total_seconds = _timing_argument(args.job_total_seconds)
+        generation = _safe_metadata_token(args.generation)
+        fingerprint = _safe_metadata_token(args.fingerprint)
+        run_id = _safe_metadata_token(args.run_id)
+        run_attempt = _safe_metadata_token(args.run_attempt)
+        sha = _safe_metadata_token(args.sha)
         result.update(
             {
                 "schema_version": 1,
                 "role": args.role,
-                "cache_hit": args.cache_hit == "true",
-                "restore_seconds": args.restore_seconds,
-                "save_seconds": args.save_seconds,
-                "job_total_seconds": args.job_total_seconds,
-                "generation": args.generation,
-                "fingerprint": args.fingerprint,
-                "run_id": args.run_id,
-                "run_attempt": args.run_attempt,
-                "sha": args.sha,
+                "cache_hit": cache_hit,
+                "restore_seconds": restore_seconds,
+                "save_seconds": save_seconds,
+                "job_total_seconds": job_total_seconds,
+                "generation": generation,
+                "fingerprint": fingerprint,
+                "run_id": run_id,
+                "run_attempt": run_attempt,
+                "sha": sha,
             }
         )
         _write_json(result, args.output)
         write_summary(result, args.summary)
         return
 
-    results = [json.loads(path.read_text(encoding="utf-8")) for path in args.results]
+    results = []
+    for path in args.results:
+        try:
+            results.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise RuntimeError("Spike result JSON is invalid") from None
     _write_json(compare_results(results), args.output)
 
 

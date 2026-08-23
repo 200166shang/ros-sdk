@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from scripts.ci import conan_cache_spike as spike
 from scripts.ci.conan_cache_spike import collect, compare_results
 
 
@@ -100,6 +101,67 @@ class ConanCacheSpikeTests(unittest.TestCase):
         }
         return cold, warm, recovery
 
+    def _collected_payload(self, **updates: Any) -> dict[str, Any]:
+        payload = {
+            "cache_bytes": 11,
+            "cache_files": 2,
+            "conan_install_seconds": 12.5,
+            "graph_digest": "a" * 64,
+            "package_count": 1,
+            "project_build_seconds": 7.5,
+            "source_builds": [],
+        }
+        payload.update(updates)
+        return payload
+
+    def _report_arguments(
+        self,
+        root: Path,
+        *,
+        payload: dict[str, Any] | None = None,
+        role: str = "baseline",
+        cache_hit: str = "true",
+        metadata: dict[str, str] | None = None,
+        timings: dict[str, str] | None = None,
+        output: Path | None = None,
+        summary: Path | None = None,
+    ) -> list[str]:
+        collected = root / "collected.json"
+        collected.write_text(
+            json.dumps(self._collected_payload() if payload is None else payload),
+            encoding="utf-8",
+        )
+        metadata_values = {
+            "generation": "v1",
+            "fingerprint": "a" * 64,
+            "run-id": "456",
+            "run-attempt": "2",
+            "sha": "deadbeef",
+        }
+        metadata_values.update(metadata or {})
+        timing_values = {
+            "restore-seconds": "3.25",
+            "save-seconds": "4.5",
+            "job-total-seconds": "30",
+        }
+        timing_values.update(timings or {})
+        arguments = [
+            "report",
+            "--collected",
+            str(collected),
+            "--output",
+            str(root / "result.json" if output is None else output),
+            "--summary",
+            str(root / "summary.md" if summary is None else summary),
+            "--role",
+            role,
+            "--cache-hit",
+            cache_hit,
+        ]
+        for name, value in (*timing_values.items(), *metadata_values.items()):
+            arguments.append(f"--{name}={value}")
+        return arguments
+
     def _run_cli(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, "-m", "scripts.ci.conan_cache_spike", *arguments],
@@ -108,16 +170,37 @@ class ConanCacheSpikeTests(unittest.TestCase):
             text=True,
         )
 
+    def _threshold_verdict(
+        self, warm_preps: tuple[float, float, float], *, cold_prep: float
+    ) -> dict[str, Any]:
+        cold, warm, recovery = self._samples()
+        cold["restore_seconds"] = 0.0
+        cold["conan_install_seconds"] = cold_prep
+        for sample, prep in zip(warm, warm_preps):
+            sample["restore_seconds"] = 0.0
+            sample["conan_install_seconds"] = prep
+        return compare_results([cold, *warm, recovery])
+
     def test_collect_emits_stable_safe_identity_and_timing_math(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cache, graph, log = self._collection_inputs(root)
 
-            first = collect(cache, graph, log, build_total_seconds=20.0)
             payload = json.loads(graph.read_text(encoding="utf-8"))
+            payload["graph"]["nodes"]["2"] = {
+                "ref": "openssl/3.3.2#second-recipe",
+                "rrev": "second-recipe",
+                "package_id": "second-package-id",
+                "prev": "second-package-revision",
+                "context": "host",
+                "binary": "Cache",
+            }
+            graph.write_text(json.dumps(payload), encoding="utf-8")
+            first = collect(cache, graph, log, build_total_seconds=20.0)
             payload["graph"]["nodes"] = {
-                "9": payload["graph"]["nodes"]["1"],
-                "3": payload["graph"]["nodes"]["0"],
+                "0": payload["graph"]["nodes"]["0"],
+                "2": payload["graph"]["nodes"]["2"],
+                "1": payload["graph"]["nodes"]["1"],
             }
             graph.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             second = collect(cache, graph, log, build_total_seconds=20.0)
@@ -137,7 +220,7 @@ class ConanCacheSpikeTests(unittest.TestCase):
             )
             self.assertEqual(first["cache_bytes"], 11)
             self.assertEqual(first["cache_files"], 2)
-            self.assertEqual(first["package_count"], 1)
+            self.assertEqual(first["package_count"], 2)
             self.assertEqual(first["source_builds"], [])
             self.assertEqual(first["conan_install_seconds"], 12.5)
             self.assertEqual(first["project_build_seconds"], 7.5)
@@ -152,6 +235,31 @@ class ConanCacheSpikeTests(unittest.TestCase):
             result = collect(cache, graph, log, build_total_seconds=10.0)
 
             self.assertEqual(result["project_build_seconds"], 0.0)
+
+    def test_collect_rejects_invalid_build_total_timings(self) -> None:
+        invalid_values = (-1.0, float("nan"), float("inf"), float("-inf"), True)
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    cache, graph, log = self._collection_inputs(root)
+
+                    with self.assertRaisesRegex(RuntimeError, "timing"):
+                        collect(cache, graph, log, build_total_seconds=value)
+
+    def test_collect_rejects_invalid_conan_install_timings(self) -> None:
+        invalid_values = ("-1", "NaN", "Infinity", "9" * 400)
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    cache, graph, log = self._collection_inputs(root)
+                    log.write_text(
+                        f"Conan install elapsed: {value}s\n", encoding="utf-8"
+                    )
+
+                    with self.assertRaisesRegex(RuntimeError, "timing"):
+                        collect(cache, graph, log, build_total_seconds=20.0)
 
     def test_collect_rejects_forbidden_config_case_insensitively(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -204,6 +312,56 @@ class ConanCacheSpikeTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "not a directory"):
                     collect(cache_file, graph, log, build_total_seconds=2.0)
 
+    def test_cache_validation_errors_do_not_expose_paths_or_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            graph = root / "graph.json"
+            self._graph(graph)
+            log = root / "build.log"
+            log.write_text("Conan install elapsed: 1s\n", encoding="utf-8")
+            sentinel = "sentinel-private-cache-path"
+
+            invalid_paths = []
+            missing = root / sentinel
+            invalid_paths.append(missing)
+            symlink_cache = root / f"{sentinel}-symlink"
+            target = root / "target"
+            target.mkdir()
+            (target / "archive").write_bytes(b"archive")
+            symlink_cache.symlink_to(target, target_is_directory=True)
+            invalid_paths.append(symlink_cache)
+            forbidden_cache = root / "forbidden"
+            forbidden_cache.mkdir()
+            (forbidden_cache / "credentials.json").write_text(
+                "secret", encoding="utf-8"
+            )
+            invalid_paths.append(forbidden_cache)
+
+            for cache in invalid_paths:
+                with self.subTest(cache=cache.name):
+                    with self.assertRaises(RuntimeError) as context:
+                        collect(cache, graph, log, build_total_seconds=2.0)
+                    message = str(context.exception)
+                    self.assertNotIn(sentinel, message)
+                    self.assertNotIn("credentials.json", message)
+
+    def test_missing_graph_and_log_errors_do_not_expose_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache, graph, log = self._collection_inputs(root)
+            sentinel = "sentinel-private-input-path"
+            missing_graph = root / f"{sentinel}-graph.json"
+            missing_log = root / f"{sentinel}-build.log"
+
+            for graph_path, log_path in (
+                (missing_graph, log),
+                (graph, missing_log),
+            ):
+                with self.subTest(graph=graph_path.name, log=log_path.name):
+                    with self.assertRaises(RuntimeError) as context:
+                        collect(cache, graph_path, log_path, build_total_seconds=20.0)
+                    self.assertNotIn(sentinel, str(context.exception))
+
     def test_collect_rejects_source_builds_without_exposing_refs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -242,6 +400,17 @@ class ConanCacheSpikeTests(unittest.TestCase):
 
             self.assertNotEqual(original["graph_digest"], changed_package["graph_digest"])
             self.assertNotEqual(original["graph_digest"], changed_context["graph_digest"])
+
+    def test_collect_rejects_nonfinite_graph_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache, graph, log = self._collection_inputs(root)
+            payload = json.loads(graph.read_text(encoding="utf-8"))
+            payload["graph"]["nodes"]["1"]["package_id"] = float("nan")
+            graph.write_text(json.dumps(payload), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "graph"):
+                collect(cache, graph, log, build_total_seconds=20.0)
 
     def test_compare_accepts_five_run_fixture(self) -> None:
         cold, warm, recovery = self._samples()
@@ -307,6 +476,189 @@ class ConanCacheSpikeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "positive"):
             compare_results([cold, *warm, recovery])
 
+    def test_compare_rejects_invalid_individual_timings(self) -> None:
+        invalid_values = (-1.0, float("nan"), float("inf"), float("-inf"), True)
+        for field in ("restore_seconds", "conan_install_seconds"):
+            for value in invalid_values:
+                with self.subTest(field=field, value=value):
+                    cold, warm, recovery = self._samples()
+                    warm[0][field] = value
+
+                    with self.assertRaisesRegex(RuntimeError, "timing"):
+                        compare_results([cold, *warm, recovery])
+
+    def test_compare_rejects_nonfinite_aggregate_timings(self) -> None:
+        for sample_name in ("cold", "recovery"):
+            with self.subTest(sample=sample_name):
+                cold, warm, recovery = self._samples()
+                sample = cold if sample_name == "cold" else recovery
+                sample["restore_seconds"] = 1e308
+                sample["conan_install_seconds"] = 1e308
+
+                with self.assertRaisesRegex(RuntimeError, "timing"):
+                    compare_results([cold, *warm, recovery])
+
+    def test_compare_rejects_non_hex_graph_digest_without_exposing_it(self) -> None:
+        cold, warm, recovery = self._samples()
+        sentinel = "sentinel-private-dependency/1.0#revision"
+        for sample in (cold, *warm, recovery):
+            sample["graph_digest"] = sentinel
+
+        with self.assertRaises(RuntimeError) as context:
+            compare_results([cold, *warm, recovery])
+
+        self.assertNotIn(sentinel, str(context.exception))
+
+    def test_compare_cli_input_error_does_not_expose_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sentinel = "sentinel-private-result-path"
+            missing = root / f"{sentinel}.json"
+
+            with self.assertRaises(RuntimeError) as context:
+                spike.main(
+                    ["compare", str(missing), "--output", str(root / "verdict.json")]
+                )
+
+            self.assertNotIn(sentinel, str(context.exception))
+
+    def test_collected_schema_rejects_malformed_allowlisted_values(self) -> None:
+        invalid_cases: list[tuple[str, Any]] = []
+        for field in ("cache_bytes", "cache_files", "package_count"):
+            invalid_cases.extend(
+                (field, value) for value in (-1, True, 1.5, "1")
+            )
+        for field in ("conan_install_seconds", "project_build_seconds"):
+            invalid_cases.extend(
+                (field, value)
+                for value in (-1.0, True, float("nan"), float("inf"), "1")
+            )
+        invalid_cases.extend(
+            (
+                ("graph_digest", "a" * 63),
+                ("graph_digest", "a" * 65),
+                ("graph_digest", "g" * 64),
+                ("graph_digest", 123),
+                ("source_builds", ["sentinel-private-dependency/1.0"]),
+                ("source_builds", {}),
+                ("source_builds", None),
+            )
+        )
+
+        for field, value in invalid_cases:
+            with self.subTest(field=field, value=value):
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "collected.json"
+                    path.write_text(
+                        json.dumps(self._collected_payload(**{field: value})),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(RuntimeError, "collected") as context:
+                        spike._safe_collected_result(path)
+                    self.assertNotIn("sentinel-private-dependency", str(context.exception))
+
+    def test_collected_schema_rejects_invalid_text_encoding_generically(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sentinel-private-collected.json"
+            path.write_bytes(b"\xff")
+
+            with self.assertRaisesRegex(RuntimeError, "collected") as context:
+                spike._safe_collected_result(path)
+
+            self.assertNotIn("sentinel-private-collected", str(context.exception))
+
+    def test_report_rejects_invalid_timing_arguments(self) -> None:
+        invalid_values = ("-1", "nan", "inf", "-inf")
+        for field in (
+            "restore-seconds",
+            "save-seconds",
+            "job-total-seconds",
+        ):
+            for value in invalid_values:
+                with self.subTest(field=field, value=value):
+                    with tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory)
+                        arguments = self._report_arguments(
+                            root, timings={field: value}
+                        )
+                        with self.assertRaisesRegex(RuntimeError, "timing"):
+                            spike.main(arguments)
+                        self.assertFalse((root / "result.json").exists())
+                        self.assertFalse((root / "summary.md").exists())
+
+    def test_report_accepts_safe_single_line_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spike.main(self._report_arguments(root))
+
+            result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["generation"], "v1")
+            self.assertEqual(result["fingerprint"], "a" * 64)
+            self.assertEqual(result["run_id"], "456")
+            self.assertEqual(result["run_attempt"], "2")
+            self.assertEqual(result["sha"], "deadbeef")
+
+    def test_report_rejects_unsafe_metadata_tokens(self) -> None:
+        unsafe_cases = (
+            ("generation", ""),
+            ("generation", "line\nbreak"),
+            ("generation", "bad|table"),
+            ("fingerprint", "`code`"),
+            ("run-id", "../secret"),
+            ("run-attempt", "pkg/1.0#revision"),
+            ("sha", "bad\\path"),
+            ("sha", "control\x01character"),
+        )
+        for field, value in unsafe_cases:
+            with self.subTest(field=field, value=value):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    arguments = self._report_arguments(
+                        root, metadata={field: value}
+                    )
+                    with self.assertRaisesRegex(RuntimeError, "metadata") as context:
+                        spike.main(arguments)
+                    if value:
+                        self.assertNotIn(value, str(context.exception))
+                    self.assertFalse((root / "result.json").exists())
+                    self.assertFalse((root / "summary.md").exists())
+
+    def test_report_rejects_recovery_cache_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._report_arguments(
+                root, role="recovery", cache_hit="true"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "role"):
+                spike.main(arguments)
+            self.assertFalse((root / "result.json").exists())
+            self.assertFalse((root / "summary.md").exists())
+
+    def test_report_rejects_output_summary_path_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "nested"
+            nested.mkdir()
+            output = root / "evidence.json"
+            aliases = (output, nested / ".." / "evidence.json")
+
+            for summary in aliases:
+                with self.subTest(summary=summary):
+                    arguments = self._report_arguments(
+                        root, output=output, summary=summary
+                    )
+                    with self.assertRaisesRegex(RuntimeError, "destinations"):
+                        spike.main(arguments)
+                    self.assertFalse(output.exists())
+
+    def test_json_writer_rejects_nonfinite_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "result.json"
+            with self.assertRaises(ValueError):
+                spike._write_json({"invalid": float("nan")}, output)
+            self.assertFalse(output.exists())
+
     def test_compare_marks_single_warm_over_sixty_for_investigation(self) -> None:
         cold, warm, recovery = self._samples()
         warm[2]["restore_seconds"] = 41.0
@@ -339,6 +691,48 @@ class ConanCacheSpikeTests(unittest.TestCase):
         self.assertEqual(verdict["decision"], "reject")
         self.assertLess(verdict["improvement_percent"], 70.0)
         self.assertIn("below 70%", " ".join(verdict["reasons"]))
+
+    def test_improvement_boundary_uses_published_one_decimal_value(self) -> None:
+        cases = (
+            ("just below", 30.06, 69.9, "reject"),
+            ("exact", 30.04, 70.0, "accept"),
+            ("just above", 29.94, 70.1, "accept"),
+        )
+        for label, warm_prep, published, decision in cases:
+            with self.subTest(label=label):
+                verdict = self._threshold_verdict(
+                    (warm_prep, warm_prep, warm_prep), cold_prep=100.0
+                )
+                self.assertEqual(verdict["improvement_percent"], published)
+                self.assertEqual(verdict["decision"], decision)
+
+    def test_warm_median_boundary_uses_published_three_decimal_value(self) -> None:
+        cases = (
+            ("just below", 44.999, 44.999, "accept"),
+            ("exact", 45.0004, 45.0, "accept"),
+            ("just above", 45.0006, 45.001, "investigate"),
+        )
+        for label, warm_prep, published, decision in cases:
+            with self.subTest(label=label):
+                verdict = self._threshold_verdict(
+                    (warm_prep, warm_prep, warm_prep), cold_prep=200.0
+                )
+                self.assertEqual(verdict["warm_median_seconds"], published)
+                self.assertEqual(verdict["decision"], decision)
+
+    def test_warm_max_boundary_uses_published_three_decimal_value(self) -> None:
+        cases = (
+            ("just below", 59.999, 59.999, "accept"),
+            ("exact", 60.0004, 60.0, "accept"),
+            ("just above", 60.0006, 60.001, "investigate"),
+        )
+        for label, warm_max, published, decision in cases:
+            with self.subTest(label=label):
+                verdict = self._threshold_verdict(
+                    (20.0, 25.0, warm_max), cold_prep=200.0
+                )
+                self.assertEqual(verdict["warm_max_seconds"], published)
+                self.assertEqual(verdict["decision"], decision)
 
     def test_compare_investigates_cache_over_one_gib(self) -> None:
         cold, warm, recovery = self._samples()
@@ -437,7 +831,7 @@ class ConanCacheSpikeTests(unittest.TestCase):
                 "--generation",
                 "v1",
                 "--fingerprint",
-                "fingerprint-123",
+                "a" * 64,
                 "--run-id",
                 "456",
                 "--run-attempt",
@@ -453,14 +847,14 @@ class ConanCacheSpikeTests(unittest.TestCase):
             self.assertEqual(result["role"], "baseline")
             self.assertIs(result["cache_hit"], True)
             self.assertEqual(result["generation"], "v1")
-            self.assertEqual(result["fingerprint"], "fingerprint-123")
+            self.assertEqual(result["fingerprint"], "a" * 64)
             self.assertEqual(result["run_id"], "456")
             self.assertEqual(result["run_attempt"], "2")
             self.assertEqual(result["sha"], "deadbeef")
             self.assertTrue(result_text.endswith("\n"))
             for expected in (
                 "baseline",
-                "fingerprint-123",
+                "a" * 64,
                 "deadbeef",
                 "Cache restore",
                 "Conan install",
