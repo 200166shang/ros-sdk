@@ -195,6 +195,14 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"seconds={seconds:.3f}\n")
           PY
+          if [[ "$status" -ne 0 ]]; then
+            if grep -Eq '^Conan install elapsed: [0-9]+\.[0-9]{3}s$' \
+              .cache/conan-spike/build.log; then
+              echo "Project build failed after Conan dependency preparation" >&2
+            else
+              echo "ARM64 dependency preparation required" >&2
+            fi
+          fi
           exit "$status"
 
       - name: Validate and collect sample

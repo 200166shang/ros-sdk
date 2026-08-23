@@ -344,6 +344,10 @@ def _configure_conan_remote() -> None:
 def _install_conan_dependencies() -> None:
     """Install Conan dependencies and explain strict cache misses."""
     command = conan_install_command()
+    if "--build=never" not in command:
+        _run(command)
+        return
+
     try:
         _run_conan_install(command)
     except subprocess.CalledProcessError as error:
@@ -371,7 +375,7 @@ def build_workspace(clean: bool = False) -> None:
     )
     started = time.monotonic()
     _install_conan_dependencies()
-    print(f"Conan install elapsed: {int(time.monotonic() - started)}s")
+    print(f"Conan install elapsed: {time.monotonic() - started:.3f}s")
     _run(
         [
             "bash",

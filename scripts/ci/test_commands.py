@@ -245,27 +245,51 @@ class CiCommandTests(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), "ERROR: conan.lock is invalid\n")
 
     @mock.patch.dict(commands.os.environ, {}, clear=True)
-    @mock.patch.object(
-        commands.subprocess,
-        "run",
-        return_value=subprocess.CompletedProcess(
-            ["conan", "install"],
-            0,
-            stdout="Conan install complete\n",
-            stderr="Conan diagnostic\n",
-        ),
+    @mock.patch.object(commands, "_run_conan_install")
+    @mock.patch.object(commands, "_run")
+    def test_default_conan_install_streams_through_checked_runner(
+        self, run: mock.Mock, capture: mock.Mock
+    ) -> None:
+        commands._install_conan_dependencies()
+
+        run.assert_called_once_with(commands.conan_install_command({}))
+        capture.assert_not_called()
+
+    @mock.patch.dict(
+        commands.os.environ,
+        {"CONAN_BUILD_POLICY": "never"},
+        clear=True,
     )
-    def test_conan_install_replays_success_output(
-        self, run: mock.Mock
+    @mock.patch.object(commands, "_run_conan_install")
+    @mock.patch.object(commands, "_run")
+    def test_never_policy_routes_to_diagnostic_capture(
+        self, run: mock.Mock, capture: mock.Mock
+    ) -> None:
+        commands._install_conan_dependencies()
+
+        capture.assert_called_once_with(commands.conan_install_command())
+        run.assert_not_called()
+
+    @mock.patch.dict(commands.os.environ, {}, clear=True)
+    @mock.patch.object(commands, "_run")
+    @mock.patch.object(commands, "_install_conan_dependencies")
+    @mock.patch.object(commands, "_configure_conan_remote")
+    @mock.patch.object(commands, "_capture", return_value="Conan version 2.31.2")
+    @mock.patch.object(commands.time, "monotonic", side_effect=[10.0, 11.23456])
+    def test_build_workspace_reports_conan_elapsed_to_three_decimals(
+        self,
+        monotonic: mock.Mock,
+        capture: mock.Mock,
+        configure_remote: mock.Mock,
+        install: mock.Mock,
+        run: mock.Mock,
     ) -> None:
         stdout = io.StringIO()
-        stderr = io.StringIO()
 
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            commands._install_conan_dependencies()
+        with contextlib.redirect_stdout(stdout):
+            commands.build_workspace()
 
-        self.assertEqual(stdout.getvalue(), "Conan install complete\n")
-        self.assertEqual(stderr.getvalue(), "Conan diagnostic\n")
+        self.assertIn("Conan install elapsed: 1.235s\n", stdout.getvalue())
 
     @mock.patch.dict(
         commands.os.environ,
