@@ -96,6 +96,20 @@ def confirm_dropoff(address: str, task_id: str) -> None:
     click.echo(json.dumps(_delivery_payload(status), ensure_ascii=False))
 
 
+@main.command("cancel-delivery")
+@click.option("--address", default="127.0.0.1:8765", show_default=True)
+@click.option("--task-id", required=True)
+def cancel_delivery(address: str, task_id: str) -> None:
+    """Cancel a delivery and print the resulting delivery snapshot."""
+    try:
+        with RuntimeClient(address) as runtime_client:
+            status = runtime_client.cancel_delivery(task_id)
+    except grpc.RpcError as error:
+        raise click.ClickException(f"cancel delivery failed: {error.code().name}") from error
+
+    click.echo(json.dumps(_delivery_payload(status), ensure_ascii=False))
+
+
 def _delivery_payload(status: DeliveryStatus) -> dict[str, object]:
     """Convert a delivery status into stable CLI JSON fields."""
     return {

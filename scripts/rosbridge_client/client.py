@@ -93,6 +93,14 @@ class RuntimeClient:
         )
         return self._to_delivery_status(response)
 
+    def cancel_delivery(self, task_id: str) -> DeliveryStatus:
+        """Cancel a delivery and return the resulting delivery snapshot."""
+        response = self._delivery_stub.CancelDelivery(
+            delivery_pb2.CancelDeliveryRequest(task_id=task_id),
+            timeout=self._timeout_seconds,
+        )
+        return self._to_delivery_status(response)
+
     @staticmethod
     def _to_delivery_status(response: delivery_pb2.DeliverySnapshot) -> DeliveryStatus:
         remaining_distance_m = (

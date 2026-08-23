@@ -1,6 +1,7 @@
 #include "delivery_service.hpp"
 
 #include <cmath>
+#include <mutex>
 #include <nav2_msgs/action/navigate_to_pose.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <utility>
@@ -38,9 +39,20 @@ public:
     goal.pose.header.stamp = node_->get_clock()->now();
 
     rclcpp_action::Client<Action>::SendGoalOptions options;
-    options.goal_response_callback = [result_callback](const GoalHandle::SharedPtr& handle) {
+    options.goal_response_callback = [this, result_callback](const GoalHandle::SharedPtr& handle) {
       if (handle == nullptr) {
         result_callback(Outcome::kFailed);
+        return;
+      }
+
+      bool cancel_requested = false;
+      {
+        std::lock_guard<std::mutex> lock(goal_mutex_);
+        active_goal_ = handle;
+        cancel_requested = cancel_requested_;
+      }
+      if (cancel_requested) {
+        (void)action_client_->async_cancel_goal(handle);
       }
     };
     options.feedback_callback = [feedback_callback](
@@ -50,17 +62,42 @@ public:
         feedback_callback(feedback->distance_remaining);
       }
     };
-    options.result_callback = [result_callback](const GoalHandle::WrappedResult& result) {
-      result_callback(result.code == rclcpp_action::ResultCode::SUCCEEDED ? Outcome::kSucceeded
-                                                                          : Outcome::kFailed);
+    options.result_callback = [this, result_callback](const GoalHandle::WrappedResult& result) {
+      {
+        std::lock_guard<std::mutex> lock(goal_mutex_);
+        active_goal_.reset();
+        cancel_requested_ = false;
+      }
+      if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
+        result_callback(Outcome::kSucceeded);
+      } else if (result.code == rclcpp_action::ResultCode::CANCELED) {
+        result_callback(Outcome::kCanceled);
+      } else {
+        result_callback(Outcome::kFailed);
+      }
     };
 
     (void)action_client_->async_send_goal(goal, options);
   }
 
+  void cancel() override {
+    GoalHandle::SharedPtr active_goal;
+    {
+      std::lock_guard<std::mutex> lock(goal_mutex_);
+      cancel_requested_ = true;
+      active_goal = active_goal_;
+    }
+    if (active_goal != nullptr) {
+      (void)action_client_->async_cancel_goal(active_goal);
+    }
+  }
+
 private:
   rclcpp::Node::SharedPtr node_;
   rclcpp_action::Client<Action>::SharedPtr action_client_;
+  mutable std::mutex goal_mutex_;
+  GoalHandle::SharedPtr active_goal_;
+  bool cancel_requested_{false};
 };
 
 }  // namespace
@@ -185,6 +222,38 @@ grpc::Status DeliveryService::ConfirmDropoff(grpc::ServerContext* /*context*/,
   return grpc::Status::OK;
 }
 
+grpc::Status DeliveryService::CancelDelivery(grpc::ServerContext* /*context*/,
+                                             const delivery::CancelDeliveryRequest* request,
+                                             delivery::DeliverySnapshot* response) {
+  bool cancel_navigation = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_task_.has_value() || active_task_->task_id != request->task_id()) {
+      return grpc::Status(grpc::StatusCode::NOT_FOUND, "delivery task was not found");
+    }
+
+    if (is_terminal(active_task_->state) || active_task_->state == delivery::CANCELING) {
+      fill_snapshot(*active_task_, response);
+      return grpc::Status::OK;
+    }
+
+    if (is_navigating(active_task_->state) || active_task_->state == delivery::STARTING) {
+      active_task_->state = delivery::CANCELING;
+      cancel_navigation = true;
+    } else {
+      active_task_->state = delivery::CANCELED;
+      active_task_->current_target.clear();
+      active_task_->remaining_distance_m.reset();
+    }
+    fill_snapshot(*active_task_, response);
+  }
+
+  if (cancel_navigation) {
+    navigation_->cancel();
+  }
+  return grpc::Status::OK;
+}
+
 std::optional<geometry_msgs::msg::PoseStamped> DeliveryService::resolve_location(
     const std::string& location_name) {
   if (location_name == "pickup_a") {
@@ -212,7 +281,11 @@ void DeliveryService::fill_snapshot(const DeliveryTask& task,
 }
 
 bool DeliveryService::is_terminal(delivery::DeliveryState state) {
-  return state == delivery::COMPLETED;
+  return state == delivery::COMPLETED || state == delivery::CANCELED || state == delivery::FAILED;
+}
+
+bool DeliveryService::is_navigating(delivery::DeliveryState state) {
+  return state == delivery::NAVIGATING_TO_PICKUP || state == delivery::NAVIGATING_TO_DROPOFF;
 }
 
 grpc::Status DeliveryService::invalid_state(const char* reason) {
@@ -226,6 +299,12 @@ void DeliveryService::start_navigation(const std::string& task_id,
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!active_task_.has_value() || active_task_->task_id != task_id) {
+      return;
+    }
+    if ((navigating_state == delivery::NAVIGATING_TO_PICKUP &&
+         active_task_->state != delivery::STARTING) ||
+        (navigating_state == delivery::NAVIGATING_TO_DROPOFF &&
+         active_task_->state != delivery::NAVIGATING_TO_DROPOFF)) {
       return;
     }
     active_task_->state = navigating_state;
@@ -267,6 +346,17 @@ void DeliveryService::handle_feedback(const std::string& task_id, double distanc
 void DeliveryService::handle_result(const std::string& task_id,
                                     delivery::DeliveryState navigating_state,
                                     NavigationPort::Outcome outcome) {
+  if (outcome == NavigationPort::Outcome::kCanceled) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (active_task_.has_value() && active_task_->task_id == task_id &&
+        active_task_->state == delivery::CANCELING) {
+      active_task_->state = delivery::CANCELED;
+      active_task_->current_target.clear();
+      active_task_->remaining_distance_m.reset();
+    }
+    return;
+  }
+
   if (outcome != NavigationPort::Outcome::kSucceeded) {
     if (node_ != nullptr) {
       RCLCPP_ERROR(node_->get_logger(), "Nav2 delivery goal did not succeed for %s",

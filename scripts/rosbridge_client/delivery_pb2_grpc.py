@@ -54,6 +54,11 @@ class DeliveryServiceStub(object):
                 request_serializer=delivery__pb2.ConfirmDeliveryRequest.SerializeToString,
                 response_deserializer=delivery__pb2.DeliverySnapshot.FromString,
                 _registered_method=True)
+        self.CancelDelivery = channel.unary_unary(
+                '/ros2_sdk.delivery.DeliveryService/CancelDelivery',
+                request_serializer=delivery__pb2.CancelDeliveryRequest.SerializeToString,
+                response_deserializer=delivery__pb2.DeliverySnapshot.FromString,
+                _registered_method=True)
 
 
 class DeliveryServiceServicer(object):
@@ -83,6 +88,12 @@ class DeliveryServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def CancelDelivery(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_DeliveryServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -104,6 +115,11 @@ def add_DeliveryServiceServicer_to_server(servicer, server):
             'ConfirmDropoff': grpc.unary_unary_rpc_method_handler(
                     servicer.ConfirmDropoff,
                     request_deserializer=delivery__pb2.ConfirmDeliveryRequest.FromString,
+                    response_serializer=delivery__pb2.DeliverySnapshot.SerializeToString,
+            ),
+            'CancelDelivery': grpc.unary_unary_rpc_method_handler(
+                    servicer.CancelDelivery,
+                    request_deserializer=delivery__pb2.CancelDeliveryRequest.FromString,
                     response_serializer=delivery__pb2.DeliverySnapshot.SerializeToString,
             ),
     }
@@ -214,6 +230,33 @@ class DeliveryService(object):
             target,
             '/ros2_sdk.delivery.DeliveryService/ConfirmDropoff',
             delivery__pb2.ConfirmDeliveryRequest.SerializeToString,
+            delivery__pb2.DeliverySnapshot.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CancelDelivery(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ros2_sdk.delivery.DeliveryService/CancelDelivery',
+            delivery__pb2.CancelDeliveryRequest.SerializeToString,
             delivery__pb2.DeliverySnapshot.FromString,
             options,
             channel_credentials,
