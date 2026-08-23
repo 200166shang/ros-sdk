@@ -23,6 +23,7 @@ class ConanCacheSpikeTests(unittest.TestCase):
         self,
         path: Path,
         *,
+        ref: str = "zlib/1.3.2#recipe",
         package_id: str = "pkg-id",
         context: str = "host",
         binary: str = "Cache",
@@ -38,7 +39,7 @@ class ConanCacheSpikeTests(unittest.TestCase):
                                 "context": "host",
                             },
                             "1": {
-                                "ref": "zlib/1.3.2#recipe",
+                                "ref": ref,
                                 "rrev": "recipe",
                                 "package_id": package_id,
                                 "prev": "package-revision",
@@ -203,16 +204,19 @@ class ConanCacheSpikeTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "not a directory"):
                     collect(cache_file, graph, log, build_total_seconds=2.0)
 
-    def test_collect_rejects_source_builds_and_names_refs(self) -> None:
+    def test_collect_rejects_source_builds_without_exposing_refs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cache, graph, log = self._collection_inputs(root)
-            self._graph(graph, binary="bUiLd")
+            sentinel = "sentinel-private-dependency/9.9#secret-revision"
+            self._graph(graph, ref=sentinel, binary="bUiLd")
 
-            with self.assertRaisesRegex(
-                RuntimeError, r"source builds.*zlib/1\.3\.2#recipe"
-            ):
+            with self.assertRaises(RuntimeError) as context:
                 collect(cache, graph, log, build_total_seconds=20.0)
+
+            message = str(context.exception)
+            self.assertRegex(message, r"source builds for 1 dependenc(?:y|ies)")
+            self.assertNotIn(sentinel, message)
 
     def test_collect_rejects_missing_exact_timing_line(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -263,10 +267,15 @@ class ConanCacheSpikeTests(unittest.TestCase):
 
     def test_compare_rejects_source_build_result(self) -> None:
         cold, warm, recovery = self._samples()
-        warm[1]["source_builds"] = ["zlib/1.3.2#recipe"]
+        sentinel = "sentinel-private-dependency/8.8#secret-revision"
+        warm[1]["source_builds"] = [sentinel]
 
-        with self.assertRaisesRegex(RuntimeError, "source builds"):
+        with self.assertRaises(RuntimeError) as context:
             compare_results([cold, *warm, recovery])
+
+        message = str(context.exception)
+        self.assertIn("source builds", message)
+        self.assertNotIn(sentinel, message)
 
     def test_compare_rejects_malformed_sample_matrix(self) -> None:
         cold, warm, recovery = self._samples()

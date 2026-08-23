@@ -74,7 +74,7 @@ def _graph_identity(graph_file: Path) -> tuple[str, int]:
         raise RuntimeError("Conan graph JSON graph.nodes must be an object")
 
     packages: list[dict[str, Any]] = []
-    source_builds: list[str] = []
+    source_build_count = 0
     for node in nodes.values():
         if not isinstance(node, Mapping):
             raise RuntimeError("Conan graph JSON contains an invalid dependency node")
@@ -84,11 +84,13 @@ def _graph_identity(graph_file: Path) -> tuple[str, int]:
         identity = {field: node.get(field) for field in GRAPH_FIELDS}
         packages.append(identity)
         if str(node.get("binary", "")).casefold() == "build":
-            source_builds.append(str(ref))
+            source_build_count += 1
 
-    if source_builds:
-        refs = ", ".join(sorted(source_builds))
-        raise RuntimeError(f"Conan attempted source builds for refs: {refs}")
+    if source_build_count:
+        noun = "dependency" if source_build_count == 1 else "dependencies"
+        raise RuntimeError(
+            f"Conan attempted source builds for {source_build_count} {noun}"
+        )
 
     packages.sort(
         key=lambda package: json.dumps(
