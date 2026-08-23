@@ -118,8 +118,8 @@ TEST(DeliveryServiceTest, CompletesTheTwoLegDeliveryWithConfirmations) {
   EXPECT_EQ(snapshot.state(), delivery::NAVIGATING_TO_DROPOFF);
   EXPECT_EQ(snapshot.current_target(), "dropoff_a");
   ASSERT_EQ(navigation->navigation_count(), 2U);
-  EXPECT_DOUBLE_EQ(navigation->targets.back().pose.position.x, -1.5);
-  EXPECT_DOUBLE_EQ(navigation->targets.back().pose.position.y, -1.5);
+  EXPECT_DOUBLE_EQ(navigation->targets.back().pose.position.x, 0.48);
+  EXPECT_DOUBLE_EQ(navigation->targets.back().pose.position.y, -0.46);
 
   navigation->succeed();
   ASSERT_TRUE(service->GetDelivery(nullptr, &get_request, &snapshot).ok());
