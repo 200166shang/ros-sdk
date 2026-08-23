@@ -557,6 +557,22 @@ class ConanCacheSpikeTests(unittest.TestCase):
                         spike._safe_collected_result(path)
                     self.assertNotIn("sentinel-private-dependency", str(context.exception))
 
+    def test_collected_schema_redacts_oversized_integer_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "collected.json"
+            oversized = 10**400
+            path.write_text(
+                json.dumps(
+                    self._collected_payload(conan_install_seconds=oversized)
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "collected") as context:
+                spike._safe_collected_result(path)
+
+            self.assertNotIn(str(oversized), str(context.exception))
+
     def test_collected_schema_rejects_invalid_text_encoding_generically(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "sentinel-private-collected.json"

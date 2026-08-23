@@ -128,7 +128,10 @@ def _nonnegative_finite_timing(value: Any) -> float:
     """Return a finite nonnegative timing or reject the evidence."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise RuntimeError("Spike evidence contains an invalid timing")
-    timing = float(value)
+    try:
+        timing = float(value)
+    except OverflowError:
+        raise RuntimeError("Spike evidence contains an invalid timing") from None
     if not math.isfinite(timing) or timing < 0.0:
         raise RuntimeError("Spike evidence contains an invalid timing")
     return timing
