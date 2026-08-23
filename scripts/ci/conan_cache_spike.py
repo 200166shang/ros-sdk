@@ -30,11 +30,37 @@ COLLECTED_FIELDS = (
     "project_build_seconds",
     "source_builds",
 )
+RESULT_FIELDS = frozenset(
+    (
+        *COLLECTED_FIELDS,
+        "schema_version",
+        "role",
+        "cache_hit",
+        "restore_seconds",
+        "save_seconds",
+        "job_total_seconds",
+        "generation",
+        "fingerprint",
+        "run_id",
+        "run_attempt",
+        "sha",
+    )
+)
+RESULT_TIMING_FIELDS = (
+    "restore_seconds",
+    "conan_install_seconds",
+    "project_build_seconds",
+    "save_seconds",
+    "job_total_seconds",
+)
+RESULT_COUNT_FIELDS = ("cache_bytes", "cache_files", "package_count")
 TIMING_PATTERN = re.compile(
     r"^Conan install elapsed: ([0-9]+(?:\.[0-9]+)?)s$", re.MULTILINE
 )
-GRAPH_DIGEST_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
+GRAPH_DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
 SAFE_METADATA_PATTERN = re.compile(r"[A-Za-z0-9]+")
+POSITIVE_DECIMAL_PATTERN = re.compile(r"[1-9][0-9]*")
+SHA1_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 
 def _regular_cache_files(cache_dir: Path) -> list[Path]:
@@ -151,6 +177,27 @@ def _safe_metadata_token(value: Any) -> str:
     return value
 
 
+def _fingerprint_token(value: Any) -> str:
+    """Return an exact lowercase SHA-256 environment fingerprint."""
+    if not isinstance(value, str) or GRAPH_DIGEST_PATTERN.fullmatch(value) is None:
+        raise RuntimeError("report metadata contains an invalid token")
+    return value
+
+
+def _positive_decimal_token(value: Any) -> str:
+    """Return a canonical positive decimal GitHub run identifier."""
+    if not isinstance(value, str) or POSITIVE_DECIMAL_PATTERN.fullmatch(value) is None:
+        raise RuntimeError("report metadata contains an invalid token")
+    return value
+
+
+def _sha1_token(value: Any) -> str:
+    """Return a lowercase full-length GitHub commit SHA."""
+    if not isinstance(value, str) or SHA1_PATTERN.fullmatch(value) is None:
+        raise RuntimeError("report metadata contains an invalid token")
+    return value
+
+
 def _timing_argument(value: Any) -> float:
     """Parse an untrusted CLI timing without echoing its source text."""
     try:
@@ -171,44 +218,89 @@ def collect(
     files = _regular_cache_files(cache_dir)
     graph_digest, package_count = _graph_identity(graph_file)
     conan_seconds = _conan_install_seconds(build_log)
+    if total_seconds < conan_seconds:
+        raise RuntimeError("Spike evidence contains contradictory timing")
     return {
         "cache_bytes": sum(path.stat().st_size for path in files),
         "cache_files": len(files),
         "conan_install_seconds": conan_seconds,
         "graph_digest": graph_digest,
         "package_count": package_count,
-        "project_build_seconds": max(0.0, total_seconds - conan_seconds),
+        "project_build_seconds": total_seconds - conan_seconds,
         "source_builds": [],
     }
 
 
 def _validate_result(result: Any) -> Mapping[str, Any]:
-    """Validate fields used to compare a single result."""
+    """Validate the complete published schema for one Spike result."""
     if not isinstance(result, Mapping):
-        raise RuntimeError("malformed Spike sample matrix: result is not an object")
+        raise RuntimeError("malformed Spike sample matrix: result schema is invalid")
+    try:
+        fields = frozenset(result)
+    except TypeError:
+        raise RuntimeError("malformed Spike sample matrix: result schema is invalid") from None
+    if fields != RESULT_FIELDS:
+        raise RuntimeError("malformed Spike sample matrix: result schema is invalid")
+    if type(result["schema_version"]) is not int or result["schema_version"] != 1:
+        raise RuntimeError("malformed Spike sample matrix: result schema is invalid")
     if result.get("role") not in ("baseline", "recovery"):
-        raise RuntimeError("malformed Spike sample matrix: unknown role")
+        raise RuntimeError("malformed Spike sample matrix: result schema is invalid")
     if type(result.get("cache_hit")) is not bool:
-        raise RuntimeError("malformed Spike sample matrix: cache_hit must be boolean")
+        raise RuntimeError("malformed Spike sample matrix: result schema is invalid")
     if (
         not isinstance(result.get("graph_digest"), str)
         or GRAPH_DIGEST_PATTERN.fullmatch(result["graph_digest"]) is None
     ):
-        raise RuntimeError("Spike sample has invalid graph digest")
+        raise RuntimeError(
+            "malformed Spike sample matrix: result schema has invalid graph digest"
+        )
     if "source_builds" not in result or not isinstance(result["source_builds"], list):
-        raise RuntimeError("Spike sample has invalid source_builds")
+        raise RuntimeError(
+            "malformed Spike sample matrix: result schema has invalid source_builds"
+        )
 
-    restore = _nonnegative_finite_timing(result.get("restore_seconds"))
-    install = _nonnegative_finite_timing(result.get("conan_install_seconds"))
-    _nonnegative_finite_timing(restore + install)
-    cache_bytes = result.get("cache_bytes")
-    if isinstance(cache_bytes, bool) or not isinstance(cache_bytes, int) or cache_bytes < 0:
-        raise RuntimeError("Spike sample has invalid cache_bytes")
+    try:
+        timings = {
+            field: _nonnegative_finite_timing(result[field])
+            for field in RESULT_TIMING_FIELDS
+        }
+        # Dependency preparation is the sixth timing used by the comparison.
+        _nonnegative_finite_timing(
+            timings["restore_seconds"] + timings["conan_install_seconds"]
+        )
+    except RuntimeError:
+        raise RuntimeError(
+            "malformed Spike sample matrix: result schema has invalid timing"
+        ) from None
+    try:
+        for field in RESULT_COUNT_FIELDS:
+            _nonnegative_integer(result[field])
+    except RuntimeError:
+        raise RuntimeError(
+            "malformed Spike sample matrix: result schema has invalid count"
+        ) from None
+    if (
+        not isinstance(result["generation"], str)
+        or SAFE_METADATA_PATTERN.fullmatch(result["generation"]) is None
+        or not isinstance(result["fingerprint"], str)
+        or GRAPH_DIGEST_PATTERN.fullmatch(result["fingerprint"]) is None
+        or not isinstance(result["run_id"], str)
+        or POSITIVE_DECIMAL_PATTERN.fullmatch(result["run_id"]) is None
+        or not isinstance(result["run_attempt"], str)
+        or POSITIVE_DECIMAL_PATTERN.fullmatch(result["run_attempt"]) is None
+        or not isinstance(result["sha"], str)
+        or SHA1_PATTERN.fullmatch(result["sha"]) is None
+    ):
+        raise RuntimeError(
+            "malformed Spike sample matrix: result schema has invalid metadata"
+        )
     return result
 
 
 def compare_results(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """Evaluate Cold, Warm, and recovery results against Spike thresholds."""
+    if len(results) != 5:
+        raise RuntimeError("malformed Spike five-sample matrix")
     samples = [_validate_result(result) for result in results]
     cold = [
         result
@@ -228,19 +320,46 @@ def compare_results(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     classified_count = len(cold) + len(warm) + len(recovery)
     if (
         len(cold) != 1
-        or len(warm) < 3
+        or len(warm) != 3
         or len(recovery) != 1
         or classified_count != len(samples)
     ):
         raise RuntimeError(
-            "malformed Spike sample matrix: expected one Cold, at least three Warm, "
-            "and one recovery miss"
+            "malformed Spike sample matrix: expected one Cold, three Warm, and one "
+            "recovery miss"
         )
 
     if len({result["graph_digest"] for result in samples}) != 1:
         raise RuntimeError("dependency graph digest differs across Spike samples")
     if any(result["source_builds"] for result in samples):
         raise RuntimeError("source builds occurred in a Spike sample")
+
+    baseline = [*cold, *warm]
+    baseline_identity = cold[0]
+    baseline_attempts = {result["run_attempt"] for result in baseline}
+    sample_keys = {(result["run_id"], result["run_attempt"]) for result in samples}
+    recovery_sample = recovery[0]
+    if (
+        any(result["generation"] != "v1" for result in baseline)
+        or any(
+            result["fingerprint"] != baseline_identity["fingerprint"]
+            for result in baseline
+        )
+        or any(result["run_id"] != baseline_identity["run_id"] for result in baseline)
+        or any(result["sha"] != baseline_identity["sha"] for result in baseline)
+        or baseline_attempts != {"1", "2", "3", "4"}
+        or cold[0]["run_attempt"] != "1"
+        or {result["run_attempt"] for result in warm} != {"2", "3", "4"}
+        or recovery_sample["generation"] != "v2"
+        or recovery_sample["run_attempt"] != "1"
+        or recovery_sample["fingerprint"] != baseline_identity["fingerprint"]
+        or recovery_sample["run_id"] == baseline_identity["run_id"]
+        or recovery_sample["sha"] == baseline_identity["sha"]
+        or len(sample_keys) != 5
+    ):
+        raise RuntimeError("Spike results are not a comparable five-sample sequence")
+
+    warm.sort(key=lambda result: int(result["run_attempt"]))
 
     cold_prep = _nonnegative_finite_timing(
         _nonnegative_finite_timing(cold[0]["restore_seconds"])
@@ -459,10 +578,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         save_seconds = _timing_argument(args.save_seconds)
         job_total_seconds = _timing_argument(args.job_total_seconds)
         generation = _safe_metadata_token(args.generation)
-        fingerprint = _safe_metadata_token(args.fingerprint)
-        run_id = _safe_metadata_token(args.run_id)
-        run_attempt = _safe_metadata_token(args.run_attempt)
-        sha = _safe_metadata_token(args.sha)
+        fingerprint = _fingerprint_token(args.fingerprint)
+        run_id = _positive_decimal_token(args.run_id)
+        run_attempt = _positive_decimal_token(args.run_attempt)
+        sha = _sha1_token(args.sha)
         result.update(
             {
                 "schema_version": 1,
@@ -478,6 +597,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "sha": sha,
             }
         )
+        _validate_result(result)
         _write_json(result, args.output)
         write_summary(result, args.summary)
         return

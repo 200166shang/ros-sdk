@@ -71,9 +71,16 @@ class ConanCacheSpikeTests(unittest.TestCase):
 
     def _samples(self) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
         common = {
+            "schema_version": 1,
             "graph_digest": "a" * 64,
             "source_builds": [],
             "cache_bytes": 1000,
+            "cache_files": 2,
+            "package_count": 1,
+            "project_build_seconds": 10.0,
+            "save_seconds": 0.0,
+            "job_total_seconds": 240.0,
+            "fingerprint": "f" * 64,
         }
         cold = {
             **common,
@@ -81,6 +88,10 @@ class ConanCacheSpikeTests(unittest.TestCase):
             "cache_hit": False,
             "restore_seconds": 1.0,
             "conan_install_seconds": 199.0,
+            "generation": "v1",
+            "run_id": "100",
+            "run_attempt": "1",
+            "sha": "a" * 40,
         }
         warm = [
             {
@@ -89,8 +100,12 @@ class ConanCacheSpikeTests(unittest.TestCase):
                 "cache_hit": True,
                 "restore_seconds": 5.0,
                 "conan_install_seconds": install,
+                "generation": "v1",
+                "run_id": "100",
+                "run_attempt": str(attempt),
+                "sha": "a" * 40,
             }
-            for install in (15.0, 20.0, 25.0)
+            for attempt, install in zip((2, 3, 4), (15.0, 20.0, 25.0))
         ]
         recovery = {
             **common,
@@ -98,6 +113,10 @@ class ConanCacheSpikeTests(unittest.TestCase):
             "cache_hit": False,
             "restore_seconds": 1.0,
             "conan_install_seconds": 205.0,
+            "generation": "v2",
+            "run_id": "200",
+            "run_attempt": "1",
+            "sha": "b" * 40,
         }
         return cold, warm, recovery
 
@@ -136,7 +155,7 @@ class ConanCacheSpikeTests(unittest.TestCase):
             "fingerprint": "a" * 64,
             "run-id": "456",
             "run-attempt": "2",
-            "sha": "deadbeef",
+            "sha": "d" * 40,
         }
         metadata_values.update(metadata or {})
         timing_values = {
@@ -227,12 +246,20 @@ class ConanCacheSpikeTests(unittest.TestCase):
             self.assertEqual(len(first["graph_digest"]), 64)
             self.assertNotIn("zlib", json.dumps(first))
 
-    def test_collect_clamps_project_build_time_to_zero(self) -> None:
+    def test_collect_rejects_build_total_shorter_than_conan_install(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cache, graph, log = self._collection_inputs(root)
 
-            result = collect(cache, graph, log, build_total_seconds=10.0)
+            with self.assertRaisesRegex(RuntimeError, "timing"):
+                collect(cache, graph, log, build_total_seconds=10.0)
+
+    def test_collect_allows_equal_build_and_conan_timings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache, graph, log = self._collection_inputs(root)
+
+            result = collect(cache, graph, log, build_total_seconds=12.5)
 
             self.assertEqual(result["project_build_seconds"], 0.0)
 
@@ -415,7 +442,7 @@ class ConanCacheSpikeTests(unittest.TestCase):
     def test_compare_accepts_five_run_fixture(self) -> None:
         cold, warm, recovery = self._samples()
 
-        verdict = compare_results([cold, *warm, recovery])
+        verdict = compare_results([warm[2], recovery, cold, warm[0], warm[1]])
 
         self.assertEqual(verdict["decision"], "accept")
         self.assertEqual(verdict["improvement_percent"], 87.5)
@@ -446,11 +473,22 @@ class ConanCacheSpikeTests(unittest.TestCase):
         self.assertIn("source builds", message)
         self.assertNotIn(sentinel, message)
 
-    def test_compare_rejects_malformed_sample_matrix(self) -> None:
+    def test_compare_requires_exactly_five_samples(self) -> None:
         cold, warm, recovery = self._samples()
         malformed_matrices = (
             [cold, *warm[:2], recovery],
-            [cold, *warm, recovery, dict(recovery)],
+            [cold, *warm, dict(warm[0]), recovery],
+        )
+
+        for matrix in malformed_matrices:
+            with self.subTest(sample_count=len(matrix)):
+                with self.assertRaisesRegex(RuntimeError, "five-sample"):
+                    compare_results(matrix)
+
+    def test_compare_rejects_wrong_role_or_hit_matrix(self) -> None:
+        cold, warm, recovery = self._samples()
+        malformed_matrices = (
+            [{**cold, "cache_hit": True}, *warm, recovery],
             [cold, *warm, {**recovery, "cache_hit": True}],
             [cold, *warm, {**recovery, "role": "unknown"}],
         )
@@ -460,13 +498,117 @@ class ConanCacheSpikeTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "sample matrix"):
                     compare_results(matrix)
 
-    def test_compare_accepts_more_than_three_warm_samples(self) -> None:
+    def test_compare_rejects_identity_mismatches(self) -> None:
         cold, warm, recovery = self._samples()
+        cases = (
+            (warm[0], "fingerprint", "e" * 64),
+            (warm[0], "generation", "v2"),
+            (warm[0], "run_id", "101"),
+            (warm[0], "sha", "c" * 40),
+            (recovery, "fingerprint", "e" * 64),
+            (recovery, "generation", "v1"),
+            (recovery, "run_id", "100"),
+            (recovery, "sha", "a" * 40),
+        )
 
-        verdict = compare_results([cold, *warm, dict(warm[0]), recovery])
+        for sample, field, value in cases:
+            with self.subTest(role=sample["role"], field=field):
+                original = sample[field]
+                sample[field] = value
+                try:
+                    with self.assertRaisesRegex(RuntimeError, "comparable") as context:
+                        compare_results([cold, *warm, recovery])
+                    self.assertNotIn(value, str(context.exception))
+                finally:
+                    sample[field] = original
 
-        self.assertEqual(verdict["decision"], "accept")
-        self.assertEqual(len(verdict["warm_prep_seconds"]), 4)
+    def test_compare_rejects_duplicate_samples_and_attempts(self) -> None:
+        cold, warm, recovery = self._samples()
+        duplicate = dict(warm[0])
+
+        with self.assertRaisesRegex(RuntimeError, "comparable"):
+            compare_results([cold, warm[0], duplicate, warm[2], recovery])
+
+    def test_compare_rejects_wrong_attempt_sequence(self) -> None:
+        cases = (
+            ("cold attempt", 0, "run_attempt", "2"),
+            ("warm attempt", 1, "run_attempt", "1"),
+            ("missing attempt four", 3, "run_attempt", "5"),
+            ("recovery attempt", 4, "run_attempt", "2"),
+        )
+
+        for label, index, field, value in cases:
+            with self.subTest(label=label):
+                cold, warm, recovery = self._samples()
+                samples = [cold, *warm, recovery]
+                samples[index][field] = value
+                with self.assertRaisesRegex(RuntimeError, "comparable"):
+                    compare_results(samples)
+
+    def test_compare_rejects_missing_or_extra_result_fields(self) -> None:
+        cold, warm, recovery = self._samples()
+        for field in tuple(cold):
+            with self.subTest(missing=field):
+                malformed = dict(cold)
+                del malformed[field]
+                with self.assertRaisesRegex(RuntimeError, "schema"):
+                    compare_results([malformed, *warm, recovery])
+
+        with self.assertRaisesRegex(RuntimeError, "schema"):
+            compare_results([{**cold, "unexpected": "sentinel"}, *warm, recovery])
+
+    def test_compare_rejects_invalid_schema_types_and_values_generically(self) -> None:
+        invalid_cases: list[tuple[str, Any]] = [
+            ("schema_version", 2),
+            ("schema_version", True),
+            ("role", 1),
+            ("cache_hit", "false"),
+            ("graph_digest", "A" * 64),
+            ("graph_digest", "sentinel-private-graph"),
+            ("source_builds", "not-a-list"),
+        ]
+        for field in (
+            "restore_seconds",
+            "conan_install_seconds",
+            "project_build_seconds",
+            "save_seconds",
+            "job_total_seconds",
+        ):
+            invalid_cases.extend(
+                (field, value)
+                for value in (-1, True, float("nan"), float("inf"), "1")
+            )
+        for field in ("cache_bytes", "cache_files", "package_count"):
+            invalid_cases.extend((field, value) for value in (-1, True, 1.5, "1"))
+        invalid_cases.extend(
+            (
+                ("generation", "bad|generation"),
+                ("fingerprint", "A" * 64),
+                ("fingerprint", "f" * 63),
+                ("run_id", "0"),
+                ("run_id", "01"),
+                ("run_attempt", "0"),
+                ("run_attempt", "1.0"),
+                ("sha", "A" * 40),
+                ("sha", "a" * 39),
+            )
+        )
+
+        for field, value in invalid_cases:
+            with self.subTest(field=field, value_type=type(value).__name__):
+                cold, warm, recovery = self._samples()
+                cold[field] = value
+                with self.assertRaisesRegex(RuntimeError, "schema") as context:
+                    compare_results([cold, *warm, recovery])
+                message = str(context.exception)
+                self.assertNotIn("sentinel-private", message)
+
+    def test_compare_rejects_duplicate_run_attempt_pairs(self) -> None:
+        cold, warm, recovery = self._samples()
+        recovery["run_id"] = cold["run_id"]
+
+        with self.assertRaisesRegex(RuntimeError, "comparable"):
+            compare_results([cold, *warm, recovery])
 
     def test_compare_rejects_nonpositive_cold_preparation(self) -> None:
         cold, warm, recovery = self._samples()
@@ -612,7 +754,7 @@ class ConanCacheSpikeTests(unittest.TestCase):
             self.assertEqual(result["fingerprint"], "a" * 64)
             self.assertEqual(result["run_id"], "456")
             self.assertEqual(result["run_attempt"], "2")
-            self.assertEqual(result["sha"], "deadbeef")
+            self.assertEqual(result["sha"], "d" * 40)
 
     def test_report_rejects_unsafe_metadata_tokens(self) -> None:
         unsafe_cases = (
@@ -620,10 +762,17 @@ class ConanCacheSpikeTests(unittest.TestCase):
             ("generation", "line\nbreak"),
             ("generation", "bad|table"),
             ("fingerprint", "`code`"),
+            ("fingerprint", "A" * 64),
+            ("fingerprint", "a" * 63),
             ("run-id", "../secret"),
+            ("run-id", "0"),
+            ("run-id", "01"),
             ("run-attempt", "pkg/1.0#revision"),
+            ("run-attempt", "0"),
             ("sha", "bad\\path"),
             ("sha", "control\x01character"),
+            ("sha", "A" * 40),
+            ("sha", "a" * 39),
         )
         for field, value in unsafe_cases:
             with self.subTest(field=field, value=value):
@@ -869,7 +1018,7 @@ class ConanCacheSpikeTests(unittest.TestCase):
                 "--run-attempt",
                 "2",
                 "--sha",
-                "deadbeef",
+                "d" * 40,
             )
 
             result_text = output.read_text(encoding="utf-8")
@@ -882,12 +1031,12 @@ class ConanCacheSpikeTests(unittest.TestCase):
             self.assertEqual(result["fingerprint"], "a" * 64)
             self.assertEqual(result["run_id"], "456")
             self.assertEqual(result["run_attempt"], "2")
-            self.assertEqual(result["sha"], "deadbeef")
+            self.assertEqual(result["sha"], "d" * 40)
             self.assertTrue(result_text.endswith("\n"))
             for expected in (
                 "baseline",
                 "a" * 64,
-                "deadbeef",
+                "d" * 40,
                 "Cache restore",
                 "Conan install",
                 "Project build",
