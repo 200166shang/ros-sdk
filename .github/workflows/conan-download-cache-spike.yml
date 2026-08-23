@@ -19,9 +19,6 @@ env:
   COMPOSE_SERVICE: ros2
   COMPOSE_NO_DEPS: "true"
   CONAN_REMOTE_NAME: rosbridge
-  CONAN_REMOTE_URL: http://106.55.24.85:9300
-  CONAN_LOGIN_USERNAME: ci-reader
-  CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
   CONAN_DOWNLOAD_CACHE: /workspace/.cache/conan-download
   CONAN_BUILD_POLICY: never
   CONAN_REQUIRE_REMOTE: "true"
@@ -44,6 +41,16 @@ jobs:
 
       - name: Create measurement directories
         run: mkdir -p .cache/conan-download .cache/conan-spike
+
+      - name: Validate secure Conan remote configuration
+        env:
+          CONAN_REMOTE_URL: ${{ secrets.CONAN_REMOTE_URL }}
+        shell: bash
+        run: |
+          if [[ ! "${CONAN_REMOTE_URL:-}" =~ ^https://[^/[:space:]]+(/[^[:space:]]*)?$ ]]; then
+            echo "ARM64 dependency preparation required: secure Conan remote is not configured" >&2
+            exit 1
+          fi
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -68,6 +75,10 @@ jobs:
           done
 
       - name: Start only the ROS 2 service
+        env:
+          CONAN_REMOTE_URL: ${{ secrets.CONAN_REMOTE_URL }}
+          CONAN_LOGIN_USERNAME: ci-reader
+          CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
         run: python3 -m scripts.ci compose-up
 
       - name: Verify ARM64 build environment
@@ -77,34 +88,50 @@ jobs:
         id: fingerprint
         shell: bash
         run: |
-          image_digests=$(docker image inspect "$ROSBRIDGE_IMAGE" \
-            --format '{{range .RepoDigests}}{{println .}}{{end}}' | LC_ALL=C sort)
-          if [[ -z "$image_digests" ]]; then
+          set -euo pipefail
+          fingerprint_input=$(mktemp .cache/conan-spike/fingerprint-input.XXXXXX)
+          image_digest_input=$(mktemp .cache/conan-spike/image-digests.XXXXXX)
+          cleanup_fingerprint_inputs() {
+            rm -f "$fingerprint_input" "$image_digest_input"
+          }
+          trap cleanup_fingerprint_inputs EXIT
+
+          {
+            printf 'conan-version:\n'
+            docker exec ros2 conan --version
+            printf 'gcc-version:\n'
+            docker exec ros2 gcc --version
+            printf 'effective-profile:\n'
+            docker exec ros2 conan profile show -pr:h default \
+              -s:h build_type=Release -s:h compiler.cppstd=17
+          } >> "$fingerprint_input"
+
+          docker image inspect "$ROSBRIDGE_IMAGE" \
+            --format '{{range .RepoDigests}}{{println .}}{{end}}' > "$image_digest_input"
+          if [[ ! -s "$image_digest_input" ]]; then
             echo "Pulled image has no immutable digest" >&2
             exit 1
           fi
+          printf 'image-digests:\n' >> "$fingerprint_input"
+          LC_ALL=C sort "$image_digest_input" >> "$fingerprint_input"
 
-          fingerprint=$(
-            {
-              docker exec ros2 conan --version
-              docker exec ros2 gcc --version
-              docker exec ros2 conan profile show -pr:h default \
-                -s:h build_type=Release -s:h compiler.cppstd=17
-              printf '%s\n' "$image_digests"
-              for input in conanfile.txt conan.lock docker/Dockerfile; do
-                if [[ -f "$input" ]]; then
-                  printf '%s=' "$input"
-                  sha256sum "$input" | cut -d' ' -f1
-                else
-                  printf '%s=absent\n' "$input"
-                fi
-              done
-            } | sha256sum | cut -d' ' -f1
-          )
+          for input in conanfile.txt conan.lock docker/Dockerfile; do
+            if [[ -f "$input" ]]; then
+              file_hash=$(sha256sum "$input")
+              printf '%s=%s\n' "$input" "${file_hash%% *}" >> "$fingerprint_input"
+            else
+              printf '%s=absent\n' "$input" >> "$fingerprint_input"
+            fi
+          done
+
+          fingerprint_hash=$(sha256sum "$fingerprint_input")
+          fingerprint=${fingerprint_hash%% *}
           if [[ ! "$fingerprint" =~ ^[0-9a-f]{64}$ ]]; then
             echo "Environment fingerprint is invalid" >&2
             exit 1
           fi
+          cleanup_fingerprint_inputs
+          trap - EXIT
           echo "value=$fingerprint" >> "$GITHUB_OUTPUT"
 
       - name: Record cache restore start
@@ -133,6 +160,8 @@ jobs:
           PY
 
       - name: Verify required Conan remote
+        env:
+          CONAN_REMOTE_URL: ${{ secrets.CONAN_REMOTE_URL }}
         shell: bash
         run: |
           if verification_output=$(python3 -m scripts.ci verify-conan 2>&1); then
@@ -234,6 +263,8 @@ jobs:
         with:
           name: conan-cache-spike-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/conan-spike/result.json
+          if-no-files-found: error
+          include-hidden-files: true
           retention-days: 7
 
       - name: Upload diagnostics after failure
@@ -245,6 +276,7 @@ jobs:
             .cache/conan-spike/build.log
             log/
           if-no-files-found: ignore
+          include-hidden-files: true
           retention-days: 7
 
       - name: Stop the ROS 2 service
