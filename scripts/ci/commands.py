@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 
 ENVIRONMENT_CHANGE_PATTERNS = (
@@ -72,6 +72,11 @@ def _try_run(command: Sequence[str]) -> bool:
 
 def _capture(command: Sequence[str]) -> str:
     return subprocess.check_output(command, text=True).strip()
+
+
+def _env_flag(name: str, environ: Mapping[str, str] | None = None) -> bool:
+    environment = os.environ if environ is None else environ
+    return environment.get(name, "").lower() == "true"
 
 
 def _compose_command() -> list[str]:
@@ -159,6 +164,8 @@ def compose_up() -> None:
     command = _compose_command()
     command.extend(["--project-name", os.environ.get("COMPOSE_PROJECT_NAME", "rosbridge")])
     command.extend(["up", "--detach"])
+    if _env_flag("COMPOSE_NO_DEPS"):
+        command.append("--no-deps")
     service = os.environ.get("COMPOSE_SERVICE", "ros2")
     if service:
         command.append(service)
@@ -239,38 +246,102 @@ def verify_conan(in_container: bool = False) -> None:
     _run(["docker", "exec", "ros2", "python3", "-m", "scripts.ci", "verify-conan", "--in-container"])
 
 
+def conan_install_command(environ: Mapping[str, str] | None = None) -> list[str]:
+    """Build the Conan install command from opt-in environment controls."""
+    environment = os.environ if environ is None else environ
+    build_policy = environment.get("CONAN_BUILD_POLICY", "missing")
+    if build_policy not in ("missing", "never"):
+        raise ValueError("CONAN_BUILD_POLICY must be 'missing' or 'never'")
+
+    command = [
+        "conan",
+        "install",
+        ".",
+        "--lockfile=conan.lock",
+        "--output-folder=build",
+        f"--build={build_policy}",
+        "-s",
+        "build_type=Release",
+        "-s",
+        "compiler.cppstd=17",
+    ]
+
+    download_cache = environment.get("CONAN_DOWNLOAD_CACHE", "")
+    if download_cache:
+        if not Path(download_cache).is_absolute():
+            raise ValueError("CONAN_DOWNLOAD_CACHE must be an absolute path")
+        command.extend(["-cc", f"core.download:download_cache={download_cache}"])
+
+    graph_file = environment.get("CONAN_GRAPH_FILE", "")
+    if graph_file:
+        if not Path(graph_file).is_absolute():
+            raise ValueError("CONAN_GRAPH_FILE must be an absolute path")
+        command.extend(["--format=json", f"--out-file={graph_file}"])
+
+    return command
+
+
+def _configure_conan_remote() -> None:
+    """Configure the optional Conan remote, with strict mode for the cache Spike."""
+    require_remote = _env_flag("CONAN_REQUIRE_REMOTE")
+    remote_name = os.environ.get("CONAN_REMOTE_NAME", "rosbridge")
+    remote_url = os.environ.get("CONAN_REMOTE_URL", "")
+    username = os.environ.get("CONAN_LOGIN_USERNAME", "")
+    password = os.environ.get("CONAN_PASSWORD", "")
+
+    if require_remote and not remote_url:
+        raise RuntimeError("CONAN_REMOTE_URL is required when CONAN_REQUIRE_REMOTE=true")
+    if require_remote and (not username or not password):
+        raise RuntimeError("Conan remote credentials are required when CONAN_REQUIRE_REMOTE=true")
+
+    _try_run(["conan", "remote", "disable", remote_name])
+    if not remote_url:
+        print("Conan remote not configured; using default remotes")
+        return
+
+    try:
+        _run(
+            ["conan", "remote", "add", remote_name, remote_url, "--index", "0", "--force"],
+            quiet=True,
+        )
+        if username and password:
+            _run(
+                ["conan", "remote", "login", remote_name, username, "-p", password],
+                quiet=True,
+            )
+            _run(["conan", "remote", "enable", remote_name], quiet=True)
+            print(f"Conan remote enabled: {remote_name}")
+        else:
+            _try_run(["conan", "remote", "disable", remote_name])
+            print("Conan remote unavailable or unauthenticated; using fallback")
+    except subprocess.CalledProcessError as error:
+        _try_run(["conan", "remote", "disable", remote_name])
+        if require_remote:
+            raise RuntimeError("Conan remote setup failed") from error
+        print("Conan remote unavailable or unauthenticated; using fallback")
+
+
+def _install_conan_dependencies() -> None:
+    """Install Conan dependencies and explain strict cache misses."""
+    command = conan_install_command()
+    try:
+        _run(command)
+    except subprocess.CalledProcessError as error:
+        if "--build=never" in command:
+            raise RuntimeError(
+                "ARM64 dependency preparation required: the server is unavailable or "
+                "the exact package is missing"
+            ) from error
+        raise
+
+
 def build_workspace(clean: bool = False) -> None:
     """Install Conan dependencies and build the ROS workspace in the container."""
     if clean:
         for directory in ("build", "install", "log"):
             shutil.rmtree(directory, ignore_errors=True)
 
-    remote_name = os.environ.get("CONAN_REMOTE_NAME", "rosbridge")
-    _try_run(["conan", "remote", "disable", remote_name])
-    remote_url = os.environ.get("CONAN_REMOTE_URL", "")
-    if remote_url:
-        try:
-            _run(
-                ["conan", "remote", "add", remote_name, remote_url, "--index", "0", "--force"],
-                quiet=True,
-            )
-            username = os.environ.get("CONAN_LOGIN_USERNAME", "")
-            password = os.environ.get("CONAN_PASSWORD", "")
-            if username and password:
-                _run(
-                    ["conan", "remote", "login", remote_name, username, "-p", password],
-                    quiet=True,
-                )
-                _run(["conan", "remote", "enable", remote_name], quiet=True)
-                print(f"Conan remote enabled: {remote_name}")
-            else:
-                _try_run(["conan", "remote", "disable", remote_name])
-                print("Conan remote unavailable or unauthenticated; using fallback")
-        except subprocess.CalledProcessError:
-            _try_run(["conan", "remote", "disable", remote_name])
-            print("Conan remote unavailable or unauthenticated; using fallback")
-    else:
-        print("Conan remote not configured; using default remotes")
+    _configure_conan_remote()
 
     print(f"Conan version: {_capture(['conan', '--version'])}")
     print(
@@ -278,20 +349,7 @@ def build_workspace(clean: bool = False) -> None:
         "compiler.version=13 compiler.cppstd=17 build_type=Release"
     )
     started = time.monotonic()
-    _run(
-        [
-            "conan",
-            "install",
-            ".",
-            "--lockfile=conan.lock",
-            "--output-folder=build",
-            "--build=missing",
-            "-s",
-            "build_type=Release",
-            "-s",
-            "compiler.cppstd=17",
-        ]
-    )
+    _install_conan_dependencies()
     print(f"Conan install elapsed: {int(time.monotonic() - started)}s")
     _run(
         [
