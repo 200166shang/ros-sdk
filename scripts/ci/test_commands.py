@@ -7,11 +7,21 @@ from scripts.ci import commands
 
 class CiCommandTests(unittest.TestCase):
     def test_conan_install_command_preserves_defaults(self) -> None:
-        command = commands.conan_install_command({})
-
-        self.assertIn("--build=missing", command)
-        self.assertNotIn("-cc", command)
-        self.assertNotIn("--format=json", command)
+        self.assertEqual(
+            commands.conan_install_command({}),
+            [
+                "conan",
+                "install",
+                ".",
+                "--lockfile=conan.lock",
+                "--output-folder=build",
+                "--build=missing",
+                "-s",
+                "build_type=Release",
+                "-s",
+                "compiler.cppstd=17",
+            ],
+        )
 
     def test_conan_install_command_adds_spike_controls(self) -> None:
         command = commands.conan_install_command(
@@ -22,22 +32,36 @@ class CiCommandTests(unittest.TestCase):
             }
         )
 
-        self.assertIn("--build=never", command)
-        self.assertIn("-cc", command)
-        self.assertIn(
-            "core.download:download_cache=/workspace/.cache/conan-download",
+        self.assertEqual(
             command,
-        )
-        self.assertIn("--format=json", command)
-        self.assertIn(
-            "--out-file=/workspace/.cache/conan-spike/install-graph.json",
-            command,
+            [
+                "conan",
+                "install",
+                ".",
+                "--lockfile=conan.lock",
+                "--output-folder=build",
+                "--build=never",
+                "-s",
+                "build_type=Release",
+                "-s",
+                "compiler.cppstd=17",
+                "-cc",
+                "core.download:download_cache=/workspace/.cache/conan-download",
+                "--format=json",
+                "--out-file=/workspace/.cache/conan-spike/install-graph.json",
+            ],
         )
 
     def test_conan_install_command_rejects_relative_download_cache(self) -> None:
         with self.assertRaisesRegex(ValueError, "absolute"):
             commands.conan_install_command(
                 {"CONAN_DOWNLOAD_CACHE": ".cache/conan-download"}
+            )
+
+    def test_conan_install_command_rejects_relative_graph_file(self) -> None:
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            commands.conan_install_command(
+                {"CONAN_GRAPH_FILE": ".cache/conan-spike/install-graph.json"}
             )
 
     def test_conan_install_command_rejects_unknown_build_policy(self) -> None:
@@ -96,10 +120,13 @@ class CiCommandTests(unittest.TestCase):
     def test_never_policy_install_failure_requires_arm64_preparation(
         self, run: mock.Mock
     ) -> None:
-        with self.assertRaisesRegex(
-            RuntimeError, "ARM64 dependency preparation required"
-        ):
+        with self.assertRaises(RuntimeError) as context:
             commands._install_conan_dependencies()
+
+        message = str(context.exception)
+        self.assertIn("ARM64 dependency preparation required", message)
+        self.assertIn("server is unavailable", message)
+        self.assertIn("exact package is missing", message)
 
     @mock.patch.dict(
         commands.os.environ,
