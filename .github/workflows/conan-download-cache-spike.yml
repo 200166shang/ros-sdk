@@ -133,7 +133,14 @@ jobs:
           PY
 
       - name: Verify required Conan remote
-        run: python3 -m scripts.ci verify-conan
+        shell: bash
+        run: |
+          if verification_output=$(python3 -m scripts.ci verify-conan 2>&1); then
+            printf '%s\n' "$verification_output"
+          else
+            echo "ARM64 dependency preparation required: Conan remote verification failed" >&2
+            exit 1
+          fi
 
       - name: Install dependencies and build
         id: build-timing
