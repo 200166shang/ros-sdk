@@ -48,6 +48,11 @@ services:
   novnc:
     image: theasp/novnc:latest
     container_name: novnc
+    environment:
+      # Give Gazebo enough horizontal room for its scene and inspector panes.
+      # The browser URL uses scale=true to fit this desktop into smaller windows.
+      DISPLAY_WIDTH: "1280"
+      DISPLAY_HEIGHT: "800"
     ports:
       # theasp/novnc serves noVNC on port 8080 inside the container.
       - "6080:8080"

@@ -66,10 +66,13 @@ server，可在浏览器中查看：
 ./rb gazebo start
 ```
 
-打开 [http://localhost:6080/vnc_auto.html](http://localhost:6080/vnc_auto.html)，应能看到
-TurtleBot3 Burger 和默认世界。若浏览器仍显示 `WebUtil.fetchJSON is not a function`，说明
+打开带自适应缩放的 noVNC 页面：
+[http://localhost:6080/vnc_auto.html?scale=true](http://localhost:6080/vnc_auto.html?scale=true)，
+应能看到完整的 TurtleBot3 Burger 和默认世界。`scale=true` 会把容器的 1280×800 远程画布
+缩放到浏览器可视区，避免底部 Gazebo 信息被浏览器裁掉。若浏览器仍显示
+`WebUtil.fetchJSON is not a function`，说明
 浏览器缓存了旧版 noVNC 前端资源；可先执行硬刷新，或改用
-[http://127.0.0.1:6080/vnc_auto.html](http://127.0.0.1:6080/vnc_auto.html)。另开终端执行最小
+[http://127.0.0.1:6080/vnc_auto.html?scale=true](http://127.0.0.1:6080/vnc_auto.html?scale=true)。另开终端执行最小
 ROS 2 检查：
 
 ```bash
@@ -77,12 +80,43 @@ docker-compose exec ros2 ros2 node list
 docker-compose exec ros2 ros2 topic echo /odom --once
 ```
 
+如果只想确认 Gazebo 中的底盘确实会移动，使用与当前 Gazebo bridge 匹配的
+`geometry_msgs/msg/TwistStamped`，不要使用旧教程中的 `Twist`：
+
+```bash
+# 记录移动前位置
+docker-compose exec ros2 bash -lc \
+  "source /opt/ros/jazzy/setup.bash; \
+   ros2 topic echo /odom nav_msgs/msg/Odometry --once"
+
+# 以 0.1 m/s 前进 3 秒；timeout 结束后立即发送零速度
+docker-compose exec ros2 bash -lc \
+  "source /opt/ros/jazzy/setup.bash; \
+   timeout --signal=SIGINT 3s ros2 topic pub --rate 10 /cmd_vel \
+   geometry_msgs/msg/TwistStamped \
+   '{header: {frame_id: base_link}, twist: {linear: {x: 0.1}, angular: {z: 0.0}}}' \
+   >/dev/null; \
+   ros2 topic pub --once /cmd_vel geometry_msgs/msg/TwistStamped \
+   '{header: {frame_id: base_link}, twist: {linear: {x: 0.0}, angular: {z: 0.0}}}'"
+
+# 再读一次位置；x 或 y 应该发生变化
+docker-compose exec ros2 bash -lc \
+  "source /opt/ros/jazzy/setup.bash; \
+   ros2 topic echo /odom nav_msgs/msg/Odometry --once"
+```
+
+这条命令只验证“底盘和 Gazebo 通信正常”，不验证 Nav2 规划；验证导航时继续按验收手册
+中的 initial pose、Action Server 和配送命令执行。
+
 看到 Gazebo/ROS 节点并收到 `/odom` 消息后，可停止仿真和容器：
 
 ```bash
 ./rb gazebo stop
 ./rb docker down
 ```
+
+阶段一完整配送闭环（创建、取货确认、送达确认、取消、失败语义和重启边界）的可重复
+验收步骤见[阶段一仿真配送验收手册](docs/phase1-simulation-acceptance.md)。
 
 macOS + Colima 用户如果 Docker socket 未自动配置，先设置
 `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock`。noVNC 使用容器内的独立 X server，

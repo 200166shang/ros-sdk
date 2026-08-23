@@ -332,10 +332,10 @@ grpc::Status DeliveryService::CancelDelivery(grpc::ServerContext* /*context*/,
 std::optional<geometry_msgs::msg::PoseStamped> DeliveryService::resolve_location(
     const std::string& location_name) {
   if (location_name == "pickup_a") {
-    return make_location(0.8, -1.8);
+    return make_location(0.5, -0.5);
   }
   if (location_name == "dropoff_a") {
-    return make_location(-1.5, -1.5);
+    return make_location(0.48, -0.46);
   }
   if (location_name == "unreachable_a") {
     return make_location(20.0, 20.0);
