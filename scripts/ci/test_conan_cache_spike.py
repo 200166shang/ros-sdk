@@ -160,7 +160,7 @@ class ConanCacheSpikeTests(unittest.TestCase):
         metadata_values.update(metadata or {})
         timing_values = {
             "restore-seconds": "3.25",
-            "save-seconds": "4.5",
+            "save-seconds": "0",
             "job-total-seconds": "30",
         }
         timing_values.update(timings or {})
@@ -454,6 +454,18 @@ class ConanCacheSpikeTests(unittest.TestCase):
         self.assertEqual(verdict["graph_digest"], "a" * 64)
         self.assertTrue(verdict["reasons"])
 
+    def test_compare_accepts_gapped_rerun_attempts_in_numeric_order(self) -> None:
+        cold, warm, recovery = self._samples()
+        cold["run_attempt"] = "2"
+        for sample, attempt in zip(warm, ("3", "5", "8")):
+            sample["run_attempt"] = attempt
+        recovery["run_attempt"] = "2"
+
+        verdict = compare_results([warm[2], recovery, cold, warm[1], warm[0]])
+
+        self.assertEqual(verdict["decision"], "accept")
+        self.assertEqual(verdict["warm_prep_seconds"], [20.0, 25.0, 30.0])
+
     def test_compare_rejects_graph_mismatch(self) -> None:
         cold, warm, recovery = self._samples()
         recovery["graph_digest"] = "b" * 64
@@ -529,21 +541,14 @@ class ConanCacheSpikeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "comparable"):
             compare_results([cold, warm[0], duplicate, warm[2], recovery])
 
-    def test_compare_rejects_wrong_attempt_sequence(self) -> None:
-        cases = (
-            ("cold attempt", 0, "run_attempt", "2"),
-            ("warm attempt", 1, "run_attempt", "1"),
-            ("missing attempt four", 3, "run_attempt", "5"),
-            ("recovery attempt", 4, "run_attempt", "2"),
-        )
+    def test_compare_rejects_warm_attempt_not_after_cold(self) -> None:
+        cold, warm, recovery = self._samples()
+        cold["run_attempt"] = "5"
+        for sample, attempt in zip(warm, ("2", "3", "4")):
+            sample["run_attempt"] = attempt
 
-        for label, index, field, value in cases:
-            with self.subTest(label=label):
-                cold, warm, recovery = self._samples()
-                samples = [cold, *warm, recovery]
-                samples[index][field] = value
-                with self.assertRaisesRegex(RuntimeError, "comparable"):
-                    compare_results(samples)
+        with self.assertRaisesRegex(RuntimeError, "comparable"):
+            compare_results([cold, *warm, recovery])
 
     def test_compare_rejects_missing_or_extra_result_fields(self) -> None:
         cold, warm, recovery = self._samples()
@@ -608,6 +613,37 @@ class ConanCacheSpikeTests(unittest.TestCase):
         recovery["run_id"] = cold["run_id"]
 
         with self.assertRaisesRegex(RuntimeError, "comparable"):
+            compare_results([cold, *warm, recovery])
+
+    def test_compare_rejects_material_job_total_contradiction(self) -> None:
+        cold, warm, recovery = self._samples()
+        warm[0]["job_total_seconds"] = 29.996
+
+        with self.assertRaisesRegex(RuntimeError, "inconsistent") as context:
+            compare_results([cold, *warm, recovery])
+
+        self.assertNotIn("29.996", str(context.exception))
+
+    def test_compare_allows_three_millisecond_timing_rounding_tolerance(self) -> None:
+        cold, warm, recovery = self._samples()
+        warm[0]["job_total_seconds"] = 29.997
+
+        verdict = compare_results([cold, *warm, recovery])
+
+        self.assertEqual(verdict["decision"], "accept")
+
+    def test_compare_rejects_cache_hit_with_nonzero_save_time(self) -> None:
+        cold, warm, recovery = self._samples()
+        warm[0]["save_seconds"] = 0.001
+
+        with self.assertRaisesRegex(RuntimeError, "inconsistent"):
+            compare_results([cold, *warm, recovery])
+
+    def test_compare_rejects_package_count_mismatch(self) -> None:
+        cold, warm, recovery = self._samples()
+        recovery["package_count"] = 2
+
+        with self.assertRaisesRegex(RuntimeError, "inconsistent"):
             compare_results([cold, *warm, recovery])
 
     def test_compare_rejects_nonpositive_cold_preparation(self) -> None:
@@ -938,6 +974,7 @@ class ConanCacheSpikeTests(unittest.TestCase):
         cold, warm, recovery = self._samples()
         recovery["restore_seconds"] = 100_000.0
         recovery["conan_install_seconds"] = 100_000.0
+        recovery["job_total_seconds"] = 200_010.0
 
         verdict = compare_results([cold, *warm, recovery])
 
@@ -1006,7 +1043,7 @@ class ConanCacheSpikeTests(unittest.TestCase):
                 "--restore-seconds",
                 "3.25",
                 "--save-seconds",
-                "4.5",
+                "0",
                 "--job-total-seconds",
                 "30",
                 "--generation",

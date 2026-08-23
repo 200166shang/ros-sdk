@@ -54,6 +54,9 @@ RESULT_TIMING_FIELDS = (
     "job_total_seconds",
 )
 RESULT_COUNT_FIELDS = ("cache_bytes", "cache_files", "package_count")
+# Four independently rounded component timings plus the rounded job total can
+# differ by at most 2.5 ms. Use 3 ms to cover that publication error.
+TIMING_ROUNDING_TOLERANCE_SECONDS = 0.003
 TIMING_PATTERN = re.compile(
     r"^Conan install elapsed: ([0-9]+(?:\.[0-9]+)?)s$", re.MULTILINE
 )
@@ -268,10 +271,24 @@ def _validate_result(result: Any) -> Mapping[str, Any]:
         _nonnegative_finite_timing(
             timings["restore_seconds"] + timings["conan_install_seconds"]
         )
+        accounted_job_seconds = _nonnegative_finite_timing(
+            timings["restore_seconds"]
+            + timings["conan_install_seconds"]
+            + timings["project_build_seconds"]
+            + timings["save_seconds"]
+        )
     except RuntimeError:
         raise RuntimeError(
             "malformed Spike sample matrix: result schema has invalid timing"
         ) from None
+    if (
+        timings["job_total_seconds"] + TIMING_ROUNDING_TOLERANCE_SECONDS
+        < accounted_job_seconds
+        or (result["cache_hit"] and timings["save_seconds"] != 0.0)
+    ):
+        raise RuntimeError(
+            "malformed Spike sample matrix: result evidence is inconsistent"
+        )
     try:
         for field in RESULT_COUNT_FIELDS:
             _nonnegative_integer(result[field])
@@ -331,12 +348,16 @@ def compare_results(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
     if len({result["graph_digest"] for result in samples}) != 1:
         raise RuntimeError("dependency graph digest differs across Spike samples")
+    if len({result["package_count"] for result in samples}) != 1:
+        raise RuntimeError("Spike sample evidence is inconsistent")
     if any(result["source_builds"] for result in samples):
         raise RuntimeError("source builds occurred in a Spike sample")
 
     baseline = [*cold, *warm]
     baseline_identity = cold[0]
-    baseline_attempts = {result["run_attempt"] for result in baseline}
+    baseline_attempts = [int(result["run_attempt"]) for result in baseline]
+    cold_attempt = int(cold[0]["run_attempt"])
+    warm_attempts = [int(result["run_attempt"]) for result in warm]
     sample_keys = {(result["run_id"], result["run_attempt"]) for result in samples}
     recovery_sample = recovery[0]
     if (
@@ -347,11 +368,9 @@ def compare_results(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
         )
         or any(result["run_id"] != baseline_identity["run_id"] for result in baseline)
         or any(result["sha"] != baseline_identity["sha"] for result in baseline)
-        or baseline_attempts != {"1", "2", "3", "4"}
-        or cold[0]["run_attempt"] != "1"
-        or {result["run_attempt"] for result in warm} != {"2", "3", "4"}
+        or len(set(baseline_attempts)) != 4
+        or any(attempt <= cold_attempt for attempt in warm_attempts)
         or recovery_sample["generation"] != "v2"
-        or recovery_sample["run_attempt"] != "1"
         or recovery_sample["fingerprint"] != baseline_identity["fingerprint"]
         or recovery_sample["run_id"] == baseline_identity["run_id"]
         or recovery_sample["sha"] == baseline_identity["sha"]
