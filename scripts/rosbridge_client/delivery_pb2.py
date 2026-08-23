@@ -24,15 +24,15 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0e\x64\x65livery.proto\x12\x11ros2_sdk.delivery\"^\n\x15\x43reateDeliveryRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x17\n\x0fpickup_location\x18\x02 \x01(\t\x12\x18\n\x10\x64ropoff_location\x18\x03 \x01(\t\"%\n\x12GetDeliveryRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\")\n\x16\x43onfirmDeliveryRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"(\n\x15\x43\x61ncelDeliveryRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"\xef\x01\n\x10\x44\x65liverySnapshot\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x12\n\nrequest_id\x18\x02 \x01(\t\x12\x17\n\x0fpickup_location\x18\x03 \x01(\t\x12\x18\n\x10\x64ropoff_location\x18\x04 \x01(\t\x12/\n\x05state\x18\x05 \x01(\x0e\x32 .ros2_sdk.delivery.DeliveryState\x12\x16\n\x0e\x63urrent_target\x18\x06 \x01(\t\x12!\n\x14remaining_distance_m\x18\x07 \x01(\x01H\x00\x88\x01\x01\x42\x17\n\x15_remaining_distance_m*\xef\x01\n\rDeliveryState\x12\x1e\n\x1a\x44\x45LIVERY_STATE_UNSPECIFIED\x10\x00\x12\x0c\n\x08STARTING\x10\x01\x12\x18\n\x14NAVIGATING_TO_PICKUP\x10\x02\x12 \n\x1c\x41WAITING_PICKUP_CONFIRMATION\x10\x03\x12\x19\n\x15NAVIGATING_TO_DROPOFF\x10\x04\x12!\n\x1d\x41WAITING_DROPOFF_CONFIRMATION\x10\x05\x12\r\n\tCOMPLETED\x10\x06\x12\r\n\tCANCELING\x10\x07\x12\x0c\n\x08\x43\x41NCELED\x10\x08\x12\n\n\x06\x46\x41ILED\x10\t2\xf1\x03\n\x0f\x44\x65liveryService\x12_\n\x0e\x43reateDelivery\x12(.ros2_sdk.delivery.CreateDeliveryRequest\x1a#.ros2_sdk.delivery.DeliverySnapshot\x12Y\n\x0bGetDelivery\x12%.ros2_sdk.delivery.GetDeliveryRequest\x1a#.ros2_sdk.delivery.DeliverySnapshot\x12_\n\rConfirmPickup\x12).ros2_sdk.delivery.ConfirmDeliveryRequest\x1a#.ros2_sdk.delivery.DeliverySnapshot\x12`\n\x0e\x43onfirmDropoff\x12).ros2_sdk.delivery.ConfirmDeliveryRequest\x1a#.ros2_sdk.delivery.DeliverySnapshot\x12_\n\x0e\x43\x61ncelDelivery\x12(.ros2_sdk.delivery.CancelDeliveryRequest\x1a#.ros2_sdk.delivery.DeliverySnapshotb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0e\x64\x65livery.proto\x12\x11ros2_sdk.delivery\"^\n\x15\x43reateDeliveryRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x17\n\x0fpickup_location\x18\x02 \x01(\t\x12\x18\n\x10\x64ropoff_location\x18\x03 \x01(\t\"%\n\x12GetDeliveryRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\")\n\x16\x43onfirmDeliveryRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"(\n\x15\x43\x61ncelDeliveryRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"\x9d\x02\n\x10\x44\x65liverySnapshot\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x12\n\nrequest_id\x18\x02 \x01(\t\x12\x17\n\x0fpickup_location\x18\x03 \x01(\t\x12\x18\n\x10\x64ropoff_location\x18\x04 \x01(\t\x12/\n\x05state\x18\x05 \x01(\x0e\x32 .ros2_sdk.delivery.DeliveryState\x12\x16\n\x0e\x63urrent_target\x18\x06 \x01(\t\x12!\n\x14remaining_distance_m\x18\x07 \x01(\x01H\x00\x88\x01\x01\x12\x14\n\x0c\x66\x61ilure_code\x18\x08 \x01(\t\x12\x16\n\x0e\x66\x61ilure_reason\x18\t \x01(\tB\x17\n\x15_remaining_distance_m*\xef\x01\n\rDeliveryState\x12\x1e\n\x1a\x44\x45LIVERY_STATE_UNSPECIFIED\x10\x00\x12\x0c\n\x08STARTING\x10\x01\x12\x18\n\x14NAVIGATING_TO_PICKUP\x10\x02\x12 \n\x1c\x41WAITING_PICKUP_CONFIRMATION\x10\x03\x12\x19\n\x15NAVIGATING_TO_DROPOFF\x10\x04\x12!\n\x1d\x41WAITING_DROPOFF_CONFIRMATION\x10\x05\x12\r\n\tCOMPLETED\x10\x06\x12\r\n\tCANCELING\x10\x07\x12\x0c\n\x08\x43\x41NCELED\x10\x08\x12\n\n\x06\x46\x41ILED\x10\t2\xf1\x03\n\x0f\x44\x65liveryService\x12_\n\x0e\x43reateDelivery\x12(.ros2_sdk.delivery.CreateDeliveryRequest\x1a#.ros2_sdk.delivery.DeliverySnapshot\x12Y\n\x0bGetDelivery\x12%.ros2_sdk.delivery.GetDeliveryRequest\x1a#.ros2_sdk.delivery.DeliverySnapshot\x12_\n\rConfirmPickup\x12).ros2_sdk.delivery.ConfirmDeliveryRequest\x1a#.ros2_sdk.delivery.DeliverySnapshot\x12`\n\x0e\x43onfirmDropoff\x12).ros2_sdk.delivery.ConfirmDeliveryRequest\x1a#.ros2_sdk.delivery.DeliverySnapshot\x12_\n\x0e\x43\x61ncelDelivery\x12(.ros2_sdk.delivery.CancelDeliveryRequest\x1a#.ros2_sdk.delivery.DeliverySnapshotb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'delivery_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_DELIVERYSTATE']._serialized_start=500
-  _globals['_DELIVERYSTATE']._serialized_end=739
+  _globals['_DELIVERYSTATE']._serialized_start=546
+  _globals['_DELIVERYSTATE']._serialized_end=785
   _globals['_CREATEDELIVERYREQUEST']._serialized_start=37
   _globals['_CREATEDELIVERYREQUEST']._serialized_end=131
   _globals['_GETDELIVERYREQUEST']._serialized_start=133
@@ -42,7 +42,7 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_CANCELDELIVERYREQUEST']._serialized_start=215
   _globals['_CANCELDELIVERYREQUEST']._serialized_end=255
   _globals['_DELIVERYSNAPSHOT']._serialized_start=258
-  _globals['_DELIVERYSNAPSHOT']._serialized_end=497
-  _globals['_DELIVERYSERVICE']._serialized_start=742
-  _globals['_DELIVERYSERVICE']._serialized_end=1239
+  _globals['_DELIVERYSNAPSHOT']._serialized_end=543
+  _globals['_DELIVERYSERVICE']._serialized_start=788
+  _globals['_DELIVERYSERVICE']._serialized_end=1285
 # @@protoc_insertion_point(module_scope)

@@ -20,7 +20,7 @@ namespace ros2_sdk {
 /** The one business seam between delivery state and robot navigation. */
 class NavigationPort {
 public:
-  enum class Outcome { kSucceeded, kFailed, kCanceled };
+  enum class Outcome { kSucceeded, kFailed, kCanceled, kTimedOut };
   using FeedbackCallback = std::function<void(double)>;
   using ResultCallback = std::function<void(Outcome)>;
 
@@ -71,6 +71,8 @@ private:
     delivery::DeliveryState state{delivery::DELIVERY_STATE_UNSPECIFIED};
     std::string current_target;
     std::optional<double> remaining_distance_m;
+    std::string failure_code;
+    std::string failure_reason;
   };
 
   static std::optional<geometry_msgs::msg::PoseStamped> resolve_location(

@@ -10,6 +10,9 @@ namespace ros2_sdk {
 
 namespace {
 
+constexpr auto kNavigationTimeout = std::chrono::seconds(30);
+constexpr char kNavigationTimeoutReason[] = "navigation exceeded the 30 second time limit";
+
 geometry_msgs::msg::PoseStamped make_location(double x, double y) {
   geometry_msgs::msg::PoseStamped target;
   target.header.frame_id = "map";
@@ -38,20 +41,39 @@ public:
     goal.pose = target;
     goal.pose.header.stamp = node_->get_clock()->now();
 
+    {
+      std::lock_guard<std::mutex> lock(goal_mutex_);
+      active_goal_.reset();
+      cancel_requested_ = false;
+      timeout_requested_ = false;
+      timeout_timer_ = node_->create_wall_timer(kNavigationTimeout, [this] { handle_timeout(); });
+    }
+
     rclcpp_action::Client<Action>::SendGoalOptions options;
     options.goal_response_callback = [this, result_callback](const GoalHandle::SharedPtr& handle) {
       if (handle == nullptr) {
-        result_callback(Outcome::kFailed);
+        bool timed_out = false;
+        {
+          std::lock_guard<std::mutex> lock(goal_mutex_);
+          timed_out = timeout_requested_;
+          timeout_requested_ = false;
+          if (timeout_timer_ != nullptr) {
+            timeout_timer_->cancel();
+          }
+        }
+        result_callback(timed_out ? Outcome::kTimedOut : Outcome::kFailed);
         return;
       }
 
       bool cancel_requested = false;
+      bool timeout_requested = false;
       {
         std::lock_guard<std::mutex> lock(goal_mutex_);
         active_goal_ = handle;
         cancel_requested = cancel_requested_;
+        timeout_requested = timeout_requested_;
       }
-      if (cancel_requested) {
+      if (cancel_requested || timeout_requested) {
         (void)action_client_->async_cancel_goal(handle);
       }
     };
@@ -63,13 +85,21 @@ public:
       }
     };
     options.result_callback = [this, result_callback](const GoalHandle::WrappedResult& result) {
+      bool timed_out = false;
       {
         std::lock_guard<std::mutex> lock(goal_mutex_);
+        timed_out = timeout_requested_;
         active_goal_.reset();
         cancel_requested_ = false;
+        timeout_requested_ = false;
+        if (timeout_timer_ != nullptr) {
+          timeout_timer_->cancel();
+        }
       }
       if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
         result_callback(Outcome::kSucceeded);
+      } else if (timed_out) {
+        result_callback(Outcome::kTimedOut);
       } else if (result.code == rclcpp_action::ResultCode::CANCELED) {
         result_callback(Outcome::kCanceled);
       } else {
@@ -93,11 +123,28 @@ public:
   }
 
 private:
+  void handle_timeout() {
+    GoalHandle::SharedPtr active_goal;
+    {
+      std::lock_guard<std::mutex> lock(goal_mutex_);
+      if (cancel_requested_ || timeout_requested_) {
+        return;
+      }
+      timeout_requested_ = true;
+      active_goal = active_goal_;
+    }
+    if (active_goal != nullptr) {
+      (void)action_client_->async_cancel_goal(active_goal);
+    }
+  }
+
   rclcpp::Node::SharedPtr node_;
   rclcpp_action::Client<Action>::SharedPtr action_client_;
   mutable std::mutex goal_mutex_;
   GoalHandle::SharedPtr active_goal_;
   bool cancel_requested_{false};
+  bool timeout_requested_{false};
+  rclcpp::TimerBase::SharedPtr timeout_timer_;
 };
 
 }  // namespace
@@ -156,6 +203,10 @@ grpc::Status DeliveryService::CreateDelivery(grpc::ServerContext* /*context*/,
     if (active_task_.has_value() && !is_terminal(active_task_->state)) {
       return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED,
                           "BUSY: an active delivery already occupies the robot");
+    }
+    if (navigation_ == nullptr || !navigation_->ready(std::chrono::milliseconds(0))) {
+      return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+                          "NOT_READY: delivery navigation capability is not ready");
     }
 
     task.task_id = "task-" + std::to_string(next_task_number_++);
@@ -286,6 +337,9 @@ std::optional<geometry_msgs::msg::PoseStamped> DeliveryService::resolve_location
   if (location_name == "dropoff_a") {
     return make_location(-1.5, -1.5);
   }
+  if (location_name == "unreachable_a") {
+    return make_location(20.0, 20.0);
+  }
   return std::nullopt;
 }
 
@@ -302,6 +356,8 @@ void DeliveryService::fill_snapshot(const DeliveryTask& task,
   } else {
     response->clear_remaining_distance_m();
   }
+  response->set_failure_code(task.failure_code);
+  response->set_failure_reason(task.failure_reason);
 }
 
 bool DeliveryService::is_terminal(delivery::DeliveryState state) {
@@ -372,19 +428,48 @@ void DeliveryService::handle_result(const std::string& task_id,
                                     NavigationPort::Outcome outcome) {
   if (outcome == NavigationPort::Outcome::kCanceled) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (active_task_.has_value() && active_task_->task_id == task_id &&
-        active_task_->state == delivery::CANCELING) {
-      active_task_->state = delivery::CANCELED;
-      active_task_->current_target.clear();
-      active_task_->remaining_distance_m.reset();
+    if (active_task_.has_value() && active_task_->task_id == task_id) {
+      if (active_task_->state == delivery::CANCELING) {
+        active_task_->state = delivery::CANCELED;
+        active_task_->current_target.clear();
+        active_task_->remaining_distance_m.reset();
+      } else if (active_task_->state == navigating_state) {
+        active_task_->state = delivery::FAILED;
+        active_task_->current_target.clear();
+        active_task_->remaining_distance_m.reset();
+        active_task_->failure_code = "UNREACHABLE";
+        active_task_->failure_reason = "navigation goal did not succeed";
+      }
     }
     return;
   }
 
-  if (outcome != NavigationPort::Outcome::kSucceeded) {
+  if (outcome == NavigationPort::Outcome::kTimedOut) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (active_task_.has_value() && active_task_->task_id == task_id &&
+        (active_task_->state == navigating_state || active_task_->state == delivery::CANCELING)) {
+      active_task_->state = delivery::FAILED;
+      active_task_->current_target.clear();
+      active_task_->remaining_distance_m.reset();
+      active_task_->failure_code = "NAVIGATION_TIMEOUT";
+      active_task_->failure_reason = kNavigationTimeoutReason;
+    }
+    return;
+  }
+
+  if (outcome == NavigationPort::Outcome::kFailed) {
     if (node_ != nullptr) {
       RCLCPP_ERROR(node_->get_logger(), "Nav2 delivery goal did not succeed for %s",
                    task_id.c_str());
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (active_task_.has_value() && active_task_->task_id == task_id &&
+        (active_task_->state == navigating_state || active_task_->state == delivery::CANCELING)) {
+      active_task_->state = delivery::FAILED;
+      active_task_->current_target.clear();
+      active_task_->remaining_distance_m.reset();
+      active_task_->failure_code = "UNREACHABLE";
+      active_task_->failure_reason = "navigation goal did not succeed";
     }
     return;
   }
