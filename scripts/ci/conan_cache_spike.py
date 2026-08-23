@@ -55,8 +55,8 @@ RESULT_TIMING_FIELDS = (
 )
 RESULT_COUNT_FIELDS = ("cache_bytes", "cache_files", "package_count")
 # Four independently rounded component timings plus the rounded job total can
-# differ by at most 2.5 ms. Use 3 ms to cover that publication error.
-TIMING_ROUNDING_TOLERANCE_SECONDS = 0.003
+# differ by at most 2.5 ms. Use an exact 3 ms to cover that publication error.
+TIMING_ROUNDING_TOLERANCE_MILLISECONDS = 3
 TIMING_PATTERN = re.compile(
     r"^Conan install elapsed: ([0-9]+(?:\.[0-9]+)?)s$", re.MULTILINE
 )
@@ -210,6 +210,12 @@ def _timing_argument(value: Any) -> float:
     return _nonnegative_finite_timing(timing)
 
 
+def _published_milliseconds(value: float) -> int:
+    """Convert a timing to exact milliseconds using its published precision."""
+    seconds, milliseconds = f"{value:.3f}".split(".")
+    return int(seconds) * 1000 + int(milliseconds)
+
+
 def collect(
     cache_dir: Path,
     graph_file: Path,
@@ -271,19 +277,25 @@ def _validate_result(result: Any) -> Mapping[str, Any]:
         _nonnegative_finite_timing(
             timings["restore_seconds"] + timings["conan_install_seconds"]
         )
-        accounted_job_seconds = _nonnegative_finite_timing(
-            timings["restore_seconds"]
-            + timings["conan_install_seconds"]
-            + timings["project_build_seconds"]
-            + timings["save_seconds"]
+        accounted_job_milliseconds = sum(
+            _published_milliseconds(timings[field])
+            for field in (
+                "restore_seconds",
+                "conan_install_seconds",
+                "project_build_seconds",
+                "save_seconds",
+            )
+        )
+        job_total_milliseconds = _published_milliseconds(
+            timings["job_total_seconds"]
         )
     except RuntimeError:
         raise RuntimeError(
             "malformed Spike sample matrix: result schema has invalid timing"
         ) from None
     if (
-        timings["job_total_seconds"] + TIMING_ROUNDING_TOLERANCE_SECONDS
-        < accounted_job_seconds
+        job_total_milliseconds + TIMING_ROUNDING_TOLERANCE_MILLISECONDS
+        < accounted_job_milliseconds
         or (result["cache_hit"] and timings["save_seconds"] != 0.0)
     ):
         raise RuntimeError(

@@ -617,16 +617,22 @@ class ConanCacheSpikeTests(unittest.TestCase):
 
     def test_compare_rejects_material_job_total_contradiction(self) -> None:
         cold, warm, recovery = self._samples()
-        warm[0]["job_total_seconds"] = 29.996
+        warm[0]["restore_seconds"] = 0.001
+        warm[0]["conan_install_seconds"] = 0.008
+        warm[0]["project_build_seconds"] = 0.001
+        warm[0]["job_total_seconds"] = 0.006
 
         with self.assertRaisesRegex(RuntimeError, "inconsistent") as context:
             compare_results([cold, *warm, recovery])
 
-        self.assertNotIn("29.996", str(context.exception))
+        self.assertNotIn("0.006", str(context.exception))
 
-    def test_compare_allows_three_millisecond_timing_rounding_tolerance(self) -> None:
+    def test_compare_allows_exact_three_millisecond_float_boundary(self) -> None:
         cold, warm, recovery = self._samples()
-        warm[0]["job_total_seconds"] = 29.997
+        warm[0]["restore_seconds"] = 0.001
+        warm[0]["conan_install_seconds"] = 0.008
+        warm[0]["project_build_seconds"] = 0.001
+        warm[0]["job_total_seconds"] = 0.007
 
         verdict = compare_results([cold, *warm, recovery])
 
