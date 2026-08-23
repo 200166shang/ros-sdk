@@ -89,12 +89,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          fingerprint_input=$(mktemp .cache/conan-spike/fingerprint-input.XXXXXX)
-          image_digest_input=$(mktemp .cache/conan-spike/image-digests.XXXXXX)
           cleanup_fingerprint_inputs() {
-            rm -f "$fingerprint_input" "$image_digest_input"
+            if [[ -n "${fingerprint_input:-}" ]]; then
+              rm -f "$fingerprint_input"
+            fi
+            if [[ -n "${image_digest_input:-}" ]]; then
+              rm -f "$image_digest_input"
+            fi
           }
+          fingerprint_input=$(mktemp .cache/conan-spike/fingerprint-input.XXXXXX)
           trap cleanup_fingerprint_inputs EXIT
+          image_digest_input=$(mktemp .cache/conan-spike/image-digests.XXXXXX)
 
           {
             printf 'conan-version:\n'
