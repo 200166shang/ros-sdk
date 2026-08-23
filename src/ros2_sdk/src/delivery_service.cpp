@@ -119,19 +119,43 @@ grpc::Status DeliveryService::CreateDelivery(grpc::ServerContext* /*context*/,
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "request_id is required");
   }
 
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (active_task_.has_value() && active_task_->request_id == request->request_id()) {
+      if (active_task_->pickup_location == request->pickup_location() &&
+          active_task_->dropoff_location == request->dropoff_location()) {
+        fill_snapshot(*active_task_, response);
+        return grpc::Status::OK;
+      }
+      return grpc::Status(grpc::StatusCode::ALREADY_EXISTS,
+                          "CONFLICT: request_id was used with different parameters");
+    }
+  }
+
   const auto pickup = resolve_location(request->pickup_location());
   const auto dropoff = resolve_location(request->dropoff_location());
   if (!pickup.has_value() || !dropoff.has_value()) {
-    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-                        "pickup and dropoff locations must be known fixed locations");
+    return grpc::Status(
+        grpc::StatusCode::INVALID_ARGUMENT,
+        "INVALID_LOCATION: pickup and dropoff locations must be known fixed locations");
   }
 
   DeliveryTask task;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (active_task_.has_value() && active_task_->request_id == request->request_id()) {
+      if (active_task_->pickup_location == request->pickup_location() &&
+          active_task_->dropoff_location == request->dropoff_location()) {
+        fill_snapshot(*active_task_, response);
+        return grpc::Status::OK;
+      }
+      return grpc::Status(grpc::StatusCode::ALREADY_EXISTS,
+                          "CONFLICT: request_id was used with different parameters");
+    }
+
     if (active_task_.has_value() && !is_terminal(active_task_->state)) {
       return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED,
-                          "an active delivery already occupies the robot");
+                          "BUSY: an active delivery already occupies the robot");
     }
 
     task.task_id = "task-" + std::to_string(next_task_number_++);
