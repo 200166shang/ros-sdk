@@ -84,6 +84,44 @@ class RuntimeClientTests(unittest.TestCase):
         self.assertEqual(status.current_target, "pickup_a")
         self.assertEqual(status.remaining_distance_m, 1.25)
 
+    def test_confirm_pickup_maps_the_updated_snapshot(self) -> None:
+        response = delivery_pb2.DeliverySnapshot(
+            task_id="task-1",
+            request_id="request-1",
+            pickup_location="pickup_a",
+            dropoff_location="dropoff_a",
+            state=delivery_pb2.NAVIGATING_TO_DROPOFF,
+            current_target="dropoff_a",
+        )
+        stub = mock.Mock()
+        stub.ConfirmPickup.return_value = response
+
+        with mock.patch.object(client.delivery_pb2_grpc, "DeliveryServiceStub", return_value=stub):
+            with client.RuntimeClient("127.0.0.1:8765") as runtime_client:
+                status = runtime_client.confirm_pickup("task-1")
+
+        stub.ConfirmPickup.assert_called_once()
+        self.assertEqual(status.state, delivery_pb2.NAVIGATING_TO_DROPOFF)
+        self.assertEqual(status.current_target, "dropoff_a")
+
+    def test_confirm_dropoff_maps_the_completed_snapshot(self) -> None:
+        response = delivery_pb2.DeliverySnapshot(
+            task_id="task-1",
+            request_id="request-1",
+            pickup_location="pickup_a",
+            dropoff_location="dropoff_a",
+            state=delivery_pb2.COMPLETED,
+        )
+        stub = mock.Mock()
+        stub.ConfirmDropoff.return_value = response
+
+        with mock.patch.object(client.delivery_pb2_grpc, "DeliveryServiceStub", return_value=stub):
+            with client.RuntimeClient("127.0.0.1:8765") as runtime_client:
+                status = runtime_client.confirm_dropoff("task-1")
+
+        stub.ConfirmDropoff.assert_called_once()
+        self.assertEqual(status.state, delivery_pb2.COMPLETED)
+
 
 if __name__ == "__main__":
     unittest.main()

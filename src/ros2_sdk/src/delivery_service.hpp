@@ -5,26 +5,38 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <memory>
 #include <mutex>
-#include <nav2_msgs/action/navigate_to_pose.hpp>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
-#include <rclcpp_action/rclcpp_action.hpp>
 #include <string>
 
 #include "delivery.grpc.pb.h"
 
 namespace ros2_sdk {
 
+/** The one business seam between delivery state and robot navigation. */
+class NavigationPort {
+public:
+  enum class Outcome { kSucceeded, kFailed };
+  using FeedbackCallback = std::function<void(double)>;
+  using ResultCallback = std::function<void(Outcome)>;
+
+  virtual ~NavigationPort() = default;
+
+  virtual bool ready(std::chrono::milliseconds timeout) const = 0;
+  virtual void navigate(const geometry_msgs::msg::PoseStamped& target,
+                        FeedbackCallback feedback_callback, ResultCallback result_callback) = 0;
+};
+
 class DeliveryService final :
     public delivery::DeliveryService::Service,
     public std::enable_shared_from_this<DeliveryService> {
 public:
-  using Action = nav2_msgs::action::NavigateToPose;
-  using GoalHandle = rclcpp_action::ClientGoalHandle<Action>;
-
   explicit DeliveryService(rclcpp::Node::SharedPtr node);
+  explicit DeliveryService(std::shared_ptr<NavigationPort> navigation);
 
   /** Return whether the real Nav2 action server is currently available. */
   bool ready(std::chrono::milliseconds timeout) const;
@@ -36,6 +48,14 @@ public:
   grpc::Status GetDelivery(grpc::ServerContext* context,
                            const delivery::GetDeliveryRequest* request,
                            delivery::DeliverySnapshot* response) override;
+
+  grpc::Status ConfirmPickup(grpc::ServerContext* context,
+                             const delivery::ConfirmDeliveryRequest* request,
+                             delivery::DeliverySnapshot* response) override;
+
+  grpc::Status ConfirmDropoff(grpc::ServerContext* context,
+                              const delivery::ConfirmDeliveryRequest* request,
+                              delivery::DeliverySnapshot* response) override;
 
 private:
   struct DeliveryTask {
@@ -51,15 +71,17 @@ private:
   static std::optional<geometry_msgs::msg::PoseStamped> resolve_location(
       const std::string& location_name);
   static void fill_snapshot(const DeliveryTask& task, delivery::DeliverySnapshot* response);
+  static bool is_terminal(delivery::DeliveryState state);
+  static grpc::Status invalid_state(const char* reason);
 
-  void start_pickup_navigation(const std::string& task_id,
-                               const geometry_msgs::msg::PoseStamped& target);
-  void handle_goal_response(const std::string& task_id, const GoalHandle::SharedPtr& goal_handle);
-  void handle_feedback(const std::string& task_id, const Action::Feedback& feedback);
-  void handle_result(const std::string& task_id, const GoalHandle::WrappedResult& result);
+  void start_navigation(const std::string& task_id, const geometry_msgs::msg::PoseStamped& target,
+                        delivery::DeliveryState navigating_state);
+  void handle_feedback(const std::string& task_id, double distance_remaining);
+  void handle_result(const std::string& task_id, delivery::DeliveryState navigating_state,
+                     NavigationPort::Outcome outcome);
 
   rclcpp::Node::SharedPtr node_;
-  rclcpp_action::Client<Action>::SharedPtr action_client_;
+  std::shared_ptr<NavigationPort> navigation_;
   mutable std::mutex mutex_;
   std::optional<DeliveryTask> active_task_;
   std::uint64_t next_task_number_{1};

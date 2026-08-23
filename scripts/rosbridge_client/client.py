@@ -77,6 +77,22 @@ class RuntimeClient:
         )
         return self._to_delivery_status(response)
 
+    def confirm_pickup(self, task_id: str) -> DeliveryStatus:
+        """Confirm pickup and return the resulting delivery snapshot."""
+        response = self._delivery_stub.ConfirmPickup(
+            delivery_pb2.ConfirmDeliveryRequest(task_id=task_id),
+            timeout=self._timeout_seconds,
+        )
+        return self._to_delivery_status(response)
+
+    def confirm_dropoff(self, task_id: str) -> DeliveryStatus:
+        """Confirm dropoff and return the resulting delivery snapshot."""
+        response = self._delivery_stub.ConfirmDropoff(
+            delivery_pb2.ConfirmDeliveryRequest(task_id=task_id),
+            timeout=self._timeout_seconds,
+        )
+        return self._to_delivery_status(response)
+
     @staticmethod
     def _to_delivery_status(response: delivery_pb2.DeliverySnapshot) -> DeliveryStatus:
         remaining_distance_m = (

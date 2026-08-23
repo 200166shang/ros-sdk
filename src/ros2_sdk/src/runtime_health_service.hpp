@@ -13,8 +13,7 @@ namespace ros2_sdk {
  * Implements the Runtime health contract exposed to external clients.
  *
  * The service reports process liveness independently from delivery readiness.
- * Delivery is intentionally unavailable until a later vertical slice connects
- * the runtime to the navigation capability.
+ * Delivery readiness reflects whether the runtime can currently reach Nav2.
  */
 class RuntimeHealthService final : public runtime::RuntimeService::Service {
 public:

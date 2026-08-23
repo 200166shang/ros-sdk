@@ -112,6 +112,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(RuntimeHealth test/test_runtime_health_service.cpp)
   target_link_libraries(RuntimeHealth ros2_sdk_runtime_service)
+
+  ament_add_gtest(DeliveryService test/test_delivery_service.cpp)
+  target_link_libraries(DeliveryService ros2_sdk_runtime_service)
 endif()
 
 ament_package()
