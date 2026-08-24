@@ -272,6 +272,7 @@ jobs:
             fail_tunnel_setup
           fi
 
+          tunnel_log="$state_dir/ssh-connect.log"
           if ! ssh -F /dev/null -M -S "$control_socket" -f -N \
             -o GlobalKnownHostsFile=/dev/null \
             -o ProxyCommand=none \
@@ -291,7 +292,13 @@ jobs:
             -p "$port" \
             -l "$user" \
             -L "$docker_gateway:19300:127.0.0.1:9300" \
-            "$host" >/dev/null 2>&1; then
+            "$host" >"$tunnel_log" 2>&1; then
+            :
+          else
+            tunnel_error=$(tail -n 3 "$tunnel_log" 2>/dev/null || true)
+            if [[ -n "$tunnel_error" ]]; then
+              printf '%s\n' "$tunnel_error" >&2
+            fi
             fail_tunnel_setup
           fi
           if [[ ! -S "$control_socket" ]]; then
@@ -434,7 +441,7 @@ jobs:
           scrub_ssh_paths() {
             local scrub_path
             for scrub_path in "$key_file" "$known_hosts_file" \
-              "$control_socket" "$master_pid_file"; do
+              "$control_socket" "$master_pid_file" "$tunnel_log"; do
               if [[ -f "$scrub_path" && ! -L "$scrub_path" ]] && \
                 command -v shred >/dev/null 2>&1; then
                 shred -u "$scrub_path" >/dev/null 2>&1 || true
@@ -460,6 +467,7 @@ jobs:
           known_hosts_file="$state_dir/known_hosts"
           control_socket="$state_dir/control"
           master_pid_file="$state_dir/master.pid"
+          tunnel_log="$state_dir/ssh-connect.log"
           trap scrub_ssh_state_on_exit EXIT
 
           control_endpoint_valid=false
@@ -668,6 +676,7 @@ jobs:
                 -e "$known_hosts_file" || -L "$known_hosts_file" || \
                 -e "$control_socket" || -L "$control_socket" || \
                 -e "$master_pid_file" || -L "$master_pid_file" || \
+                -e "$tunnel_log" || -L "$tunnel_log" || \
                 -e "$state_dir" || -L "$state_dir" ]]; then
             fail_ssh_cleanup
           fi
@@ -698,6 +707,7 @@ jobs:
                 -e "$known_hosts_file" || -L "$known_hosts_file" || \
                 -e "$control_socket" || -L "$control_socket" || \
                 -e "$master_pid_file" || -L "$master_pid_file" || \
+                -e "$tunnel_log" || -L "$tunnel_log" || \
                 -e "$state_dir" || -L "$state_dir" ]]; then
             fail_ssh_cleanup
           fi
