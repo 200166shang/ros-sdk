@@ -337,9 +337,6 @@ jobs:
           if (( master_pid <= 1 )); then
             fail_tunnel_setup
           fi
-          if [[ "$master_pid" != "$ssh_launch_pid" ]]; then
-            fail_tunnel_setup
-          fi
           if ! (umask 077; printf '%s\n' "$master_pid" > "$master_pid_file") \
             2>/dev/null; then
             fail_tunnel_setup
