@@ -2,7 +2,6 @@
 build/
 install/
 log/
-.cache/
 
 # IDE
 .idea/

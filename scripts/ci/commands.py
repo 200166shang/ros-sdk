@@ -311,8 +311,5 @@ def publish_image() -> None:
     """Publish the validated candidate image under the configured CI tag."""
     candidate = os.environ["CANDIDATE_IMAGE"]
     target = os.environ["CI_IMAGE"]
-    immutable_target = os.environ.get("CI_IMAGE_IMMUTABLE", "").strip()
-    targets = [value for value in (immutable_target, target) if value]
-    for image in dict.fromkeys(targets):
-        _run(["docker", "tag", candidate, image])
-        _run(["docker", "push", image])
+    _run(["docker", "tag", candidate, target])
+    _run(["docker", "push", target])
