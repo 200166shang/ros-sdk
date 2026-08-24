@@ -75,6 +75,9 @@ jobs:
         run: python3 -m scripts.ci verify-conan
 
       - name: Run the repository CI workflow
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: ./rb ci
 
       - name: Upload colcon logs after failure

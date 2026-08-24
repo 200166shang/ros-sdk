@@ -9,7 +9,7 @@ from scripts.utils.workspace import WorkspaceManager
 
 @click.command()
 def lint_cmd() -> None:
-    """Check code style (dry-run) and run clang-tidy."""
+    """Check formatting and run incremental clang-tidy for PR changes."""
     WorkspaceManager().lint()
 
 

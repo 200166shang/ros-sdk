@@ -49,7 +49,7 @@ export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock
 ./rb build --clean        # 清理后执行 Conan install 和 colcon build
 ./rb test                 # 执行 colcon test
 ./rb test --filter Foo    # 只执行匹配 Foo 的测试
-./rb lint                 # 执行 clang-format 检查和 clang-tidy
+./rb lint                 # 全量 clang-format；PR 环境按变更 .cpp 执行 clang-tidy
 ./rb format               # 格式化 C++ 文件
 ./rb shell                # 进入 ros2 容器
 ./rb gazebo start         # 启动 Gazebo 和 TurtleBot3
