@@ -271,6 +271,7 @@ jobs:
           then
             fail_tunnel_setup
           fi
+          printf 'Docker bridge gateway: %s\n' "$docker_gateway"
 
           tunnel_log="$state_dir/ssh-connect.log"
           if ! ssh -F /dev/null -M -S "$control_socket" -f -N \
@@ -288,6 +289,7 @@ jobs:
             -o ConnectionAttempts=1 \
             -o ServerAliveInterval=15 \
             -o ServerAliveCountMax=3 \
+            -E "$tunnel_log" \
             -i "$key_file" \
             -p "$port" \
             -l "$user" \
