@@ -60,13 +60,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Restore Conan package cache
+      - name: Restore main Conan package cache
         id: conan-cache
         continue-on-error: true
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/rosbridge-conan-p
-          key: arm64-conan-2.31.2-${{ hashFiles('conan.lock', 'conanfile.txt') }}
+          key: arm64-ubuntu-24.04-conan-2.31.2-gcc-13-cppstd-17-release-${{ hashFiles('docker/Dockerfile', 'conan.lock', 'conanfile.txt') }}
 
       - name: Configure Conan package cache mount
         env:

@@ -7,6 +7,7 @@ on:
       - docker/**
       - docker-compose.yaml
       - conanfile.txt
+      - conan.lock
       - src/ros2_sdk/package.xml
       - src/ros2_sdk/CMakeLists.txt
   schedule:
@@ -24,6 +25,10 @@ concurrency:
 env:
   CI_IMAGE: ghcr.io/200166shang/ros-sdk:ci-arm64-main
   CANDIDATE_IMAGE: rosbridge:ci-arm64-candidate
+  CONAN_REMOTE_NAME: rosbridge
+  CONAN_REMOTE_URL: http://106.55.24.85:9300
+  CONAN_LOGIN_USERNAME: ci-reader
+  CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
 
 jobs:
   build-validate-publish:
@@ -39,6 +44,37 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore main Conan package cache
+        id: conan-cache
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/rosbridge-conan-p
+          key: arm64-ubuntu-24.04-conan-2.31.2-gcc-13-cppstd-17-release-${{ hashFiles('docker/Dockerfile', 'conan.lock', 'conanfile.txt') }}
+
+      - name: Configure Conan package cache mount
+        env:
+          CONAN_CACHE_PATH: ${{ runner.temp }}/rosbridge-conan-p
+          CONAN_COMPOSE_OVERRIDE: ${{ runner.temp }}/rosbridge-conan-cache.override.yaml
+          CONAN_CACHE_HIT: ${{ steps.conan-cache.outputs.cache-hit }}
+          CONAN_CACHE_OUTCOME: ${{ steps.conan-cache.outcome }}
+        run: |
+          mkdir -p "$CONAN_CACHE_PATH"
+          cat > "$CONAN_COMPOSE_OVERRIDE" <<EOF
+          services:
+            ros2:
+              volumes:
+                - $CONAN_CACHE_PATH:/root/.conan2/p
+          EOF
+          echo "COMPOSE_FILE=${GITHUB_WORKSPACE}/docker-compose.yaml:${CONAN_COMPOSE_OVERRIDE}" >> "$GITHUB_ENV"
+          if [[ "$CONAN_CACHE_OUTCOME" != "success" ]]; then
+            echo "Main Conan package cache: unavailable; continuing with Conan Server"
+          elif [[ "$CONAN_CACHE_HIT" == "true" ]]; then
+            echo "Main Conan package cache: hit"
+          else
+            echo "Main Conan package cache: miss; Conan install will populate it"
+          fi
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
