@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,7 @@ class DockerManager:
 
     def __init__(self) -> None:
         self._compose_bin = self._detect_compose()
+        self._project_name = os.environ.get("COMPOSE_PROJECT_NAME", COMPOSE_PROJECT_NAME)
 
     # -- compose detection ---------------------------------------------------
 
@@ -75,7 +77,7 @@ class DockerManager:
             "-f",
             str(COMPOSE_FILE),
             "-p",
-            COMPOSE_PROJECT_NAME,
+            self._project_name,
             *args,
         ]
         try:
