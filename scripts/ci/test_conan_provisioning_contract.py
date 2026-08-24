@@ -5,24 +5,29 @@ from pathlib import Path
 
 class ConanProvisioningContractTests(unittest.TestCase):
     def test_wizard_sets_every_secret_consumed_by_smoke_workflow(self) -> None:
-        wizard = Path("scripts/provision_conan_ci.sh").read_text(encoding="utf-8")
+        provisioning = Path("scripts/ci/conan_access_provisioning.py").read_text(
+            encoding="utf-8"
+        )
         workflow = Path(".github/workflows/conan-access-smoke.yml").read_text(
             encoding="utf-8"
         )
 
-        configured = set(
-            re.findall(r"^\s*set_secret (CONAN_[A-Z_]+) ", wizard, re.MULTILINE)
-        )
+        secret_block = provisioning.split("REPOSITORY_SECRET_NAMES = (", maxsplit=1)[1]
+        secret_block = secret_block.split(")", maxsplit=1)[0]
+        configured = set(re.findall(r'"(CONAN_[A-Z_]+)"', secret_block))
         consumed = set(re.findall(r"secrets\.(CONAN_[A-Z_]+)", workflow))
 
         self.assertEqual(configured, consumed)
 
     def test_wizard_does_not_persist_secrets_in_local_environment_file(self) -> None:
         wizard = Path("scripts/provision_conan_ci.sh").read_text(encoding="utf-8")
-        stages = wizard.split("# STAGES:", maxsplit=1)[1]
+        provisioning = Path("scripts/ci/conan_access_provisioning.py").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertNotIn("write_env ", stages)
-        self.assertIn("rm -rf \"$work_dir\"", stages)
+        self.assertNotIn("write_env ", wizard)
+        self.assertNotIn("write_env ", provisioning)
+        self.assertIn("shutil.rmtree", provisioning)
 
     def test_smoke_workflow_is_manual_read_only_and_has_no_persistence(self) -> None:
         workflow = Path(".github/workflows/conan-access-smoke.yml").read_text(

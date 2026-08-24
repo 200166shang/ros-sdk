@@ -239,6 +239,12 @@ class SshAdapter:
         return result.stdout.strip()
 
 
+def _devnull():
+    import subprocess
+
+    return subprocess.DEVNULL
+
+
 class GitHubAdapter:
     """The GitHub CLI operations used by stages six and seven."""
 
@@ -246,7 +252,12 @@ class GitHubAdapter:
         self.commands = commands
 
     def authenticate(self) -> bool:
-        result = self.commands.run(["gh", "auth", "status"], check=False)
+        result = self.commands.run(
+            ["gh", "auth", "status"],
+            check=False,
+            stdout=_devnull(),
+            stderr=_devnull(),
+        )
         return result.returncode == 0
 
     def set_secret(self, name: str, value: str) -> bool:
@@ -255,6 +266,8 @@ class GitHubAdapter:
             input=value,
             text=True,
             check=False,
+            stdout=_devnull(),
+            stderr=_devnull(),
         )
         return result.returncode == 0
 
@@ -262,6 +275,8 @@ class GitHubAdapter:
         result = self.commands.run(
             ["gh", "variable", "set", name, "--body", value],
             check=False,
+            stdout=_devnull(),
+            stderr=_devnull(),
         )
         return result.returncode == 0
 
@@ -329,6 +344,7 @@ def collect_config(ui: ConsoleUi) -> ProvisioningConfig:
         if not ui.confirm(f"Immediately revoke {emergency_key_id} from {emergency_ssh_user}?"):
             raise ProvisioningError("emergency revocation was not confirmed")
 
+    ui.stage(STAGE_NAMES[1])
     conan_ssh_host = ui.ask_default("Public SSH host:", "106.55.24.85")
     conan_ssh_port = int(ui.ask_default("Public SSH port:", "22"))
     ssh_user = ui.ask_default("Dedicated tunnel OS user:", "rosbridge-conan-ci")
@@ -685,6 +701,7 @@ def run_provisioning(
     github_adapter = github or GitHubAdapter(command_adapter)
     terminal.banner()
     terminal.stage(STAGE_NAMES[0])
+    collected_interactively = config is None
     if config is None:
         config = collect_config(terminal)
     _preflight(config, root, command_adapter, ssh_adapter, github_adapter, terminal)
@@ -692,7 +709,8 @@ def run_provisioning(
     lockfile = root / "conan.lock"
     artifacts = ProvisioningArtifacts()
     try:
-        terminal.stage(STAGE_NAMES[1])
+        if not collected_interactively:
+            terminal.stage(STAGE_NAMES[1])
         terminal.say("Dedicated Conan reader from exact ARM64 policy: "
                      f"{_load_conan_username(policy_path)}")
         _prepare_identity(artifacts, config, root, lockfile, policy_path, Path(tempfile.mkdtemp()), command_adapter)
@@ -729,6 +747,7 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
+        prog="./scripts/provision_conan_ci.sh",
         description="Provision restricted Conan CI access through a seven-stage wizard"
     )
     parser.parse_args(argv)

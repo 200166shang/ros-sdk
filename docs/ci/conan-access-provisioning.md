@@ -12,6 +12,17 @@ read-only Conan identity, writes the required GitHub Secrets, and dispatches the
 workflow. It never writes credentials to `.env`, the repository, an artifact, or a cache. Temporary
 private-key and password files use owner-only permissions and are deleted on exit.
 
+## Code layout
+
+This flow is called **Conan CI 访问配置编排**. The stable shell command is only the entry point. The
+Python module `scripts/ci/conan_access_provisioning.py` owns the seven stages in order, while the
+`SshAdapter`, `GitHubAdapter`, and `CommandAdapter` keep external commands at explicit seams. The
+wizard stops at the first failed stage; re-running it performs the checks again instead of resuming a
+partially saved progress file.
+
+The Python code intentionally uses small data classes and ordinary functions. The single complete-flow
+test uses fake adapters, so the stage order can be checked without contacting a real server or GitHub.
+
 ## Before running
 
 The maintainer needs:
