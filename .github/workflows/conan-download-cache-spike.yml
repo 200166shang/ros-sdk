@@ -445,6 +445,8 @@ jobs:
             return 0
           }
 
+          # This callback is invoked indirectly by the EXIT trap below.
+          # shellcheck disable=SC2317
           scrub_ssh_state_on_exit() {
             local original_status=$?
             trap - EXIT
