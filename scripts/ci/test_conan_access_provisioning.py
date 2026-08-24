@@ -1,20 +1,17 @@
-import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from scripts.ci.conan_access_provisioning import (
-    CommandAdapter,
     ConsoleUi,
-    GitHubAdapter,
+    LocalCommandAdapter,
     ProvisioningConfig,
-    SshAdapter,
     run_provisioning,
 )
 
 
-class FakeCommands(CommandAdapter):
+class FakeCommands(LocalCommandAdapter):
     """Small fake for the one complete provisioning-flow test."""
 
     def __init__(self) -> None:
@@ -32,18 +29,61 @@ class FakeCommands(CommandAdapter):
             return subprocess.CompletedProcess(args, 0, stdout="host ssh-ed25519 AAAA\n")
         if args[:3] == ["ssh-keygen", "-lf", str(args[-1])]:
             return subprocess.CompletedProcess(args, 0, stdout="256 SHA256:test host (ED25519)\n")
-        if args[:3] == ["gh", "auth", "status"]:
-            return subprocess.CompletedProcess(args, 0)
-        if args[:3] == ["gh", "repo", "view"]:
-            return subprocess.CompletedProcess(args, 0, stdout="main\n")
-        if args[:3] == ["gh", "workflow", "run"]:
-            self.nonce = args[-1].split("=", maxsplit=1)[1]
-        if args[:3] == ["gh", "run", "list"]:
-            output = json.dumps([
-                {"databaseId": 81, "displayTitle": f"Conan Access Smoke {self.nonce}"}
-            ])
-            return subprocess.CompletedProcess(args, 0, stdout=output)
         return subprocess.CompletedProcess(args, 0)
+
+    def create_identity(self, private_key: Path, key_id: str) -> None:
+        self.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", key_id, "-f", str(private_key)],
+            check=True,
+        )
+
+
+class FakeSshAdapter:
+    def copy_to(self, paths: list[Path], target: str, port: int) -> None:
+        return None
+
+    def create_remote_directory(self, target: str, port: int, remote_directory: str) -> None:
+        return None
+
+    def install_ssh_policy(self, target: str, port: int, remote_directory: str,
+                           ssh_user: str, key_id: str) -> None:
+        return None
+
+    def install_conan_identity(self, target: str, port: int, remote_directory: str,
+                               config_path: str, username: str) -> None:
+        return None
+
+    def restart_service(self, target: str, port: int, service: str):
+        return type("Result", (), {"returncode": 0})()
+
+    def remove_remote_directory(self, target: str, port: int, remote_directory: str) -> None:
+        return None
+
+    def revoke_key(self, target: str, port: int, script: Path, ssh_user: str, key_id: str) -> None:
+        return None
+
+
+class FakeGithubAdapter:
+    def authenticate(self) -> bool:
+        return True
+
+    def set_secret(self, name: str, value: str) -> None:
+        return None
+
+    def set_variable(self, name: str, value: str) -> None:
+        return None
+
+    def default_branch(self) -> str:
+        return "main"
+
+    def dispatch_smoke(self, workflow: str, branch: str, nonce: str) -> None:
+        self.nonce = nonce
+
+    def wait_for_smoke_run(self, workflow: str, branch: str, nonce: str) -> int:
+        return 81
+
+    def watch_run(self, run_id: int) -> None:
+        return None
 
 
 class QuietUi(ConsoleUi):
@@ -101,14 +141,13 @@ class ConanAccessProvisioningFlowTests(unittest.TestCase):
                 repo_root=repo_root,
                 ui=ui,
                 commands=commands,
-                ssh=SshAdapter(commands),
-                github=GitHubAdapter(commands),
+                ssh=FakeSshAdapter(),
+                github=FakeGithubAdapter(),
             )
 
         self.assertEqual(len(ui.stages), 7)
         self.assertEqual(artifacts.conan_username, "ros-sdk-ci-reader")
-        self.assertIn(["gh", "workflow", "run", "conan-access-smoke.yml", "--ref", "main", "-f"],
-                      [call[:7] for call in commands.calls])
+        self.assertTrue(any(call[:2] == ["ssh-keygen", "-q"] for call in commands.calls))
 
 
 if __name__ == "__main__":

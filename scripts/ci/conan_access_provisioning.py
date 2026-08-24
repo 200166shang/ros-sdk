@@ -7,18 +7,24 @@ inputs and temporary artifacts visible while the flow is running.
 
 from __future__ import annotations
 
-import base64
 import argparse
+import base64
 import json
 import secrets
 import shutil
-import shlex
 import tempfile
 from datetime import date, timedelta, datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from scripts.ci.conan_access import render_policy_bundle
+from scripts.ci.conan_access_provisioning_adapters import (
+    AdapterError,
+    FabricSshAdapter,
+    GitHubAdapter,
+    LocalCommandAdapter,
+)
+from scripts.ci.conan_access_provisioning_ui import ConsoleUi
 
 
 STAGE_NAMES = (
@@ -74,7 +80,6 @@ class ProvisioningArtifacts:
     conan_username: str = ""
     conan_password: str = ""
     rotate_after: str = ""
-    skipped_actions: list[str] = field(default_factory=list)
     written_secrets: list[str] = field(default_factory=list)
 
 
@@ -106,228 +111,6 @@ def validate_config(config: ProvisioningConfig) -> None:
 class ProvisioningError(RuntimeError):
     """A user-facing failure that stops the provisioning flow."""
 
-
-class ConsoleUi:
-    """The small terminal interface used by the shell entry point."""
-
-    def __init__(self, environment_file: Path) -> None:
-        self.environment_file = environment_file
-        self._stage_number = 0
-
-    def banner(self) -> None:
-        print("\n  Restricted Conan CI access")
-        print(f"  {len(STAGE_NAMES)} stages\n")
-        print("  You drive the browser; this wizard tells you exactly what to do and")
-        print("  captures the values you copy back. Stop any time with Ctrl-C and re-run")
-        print("  later, since it remembers values already saved.\n")
-        self.pause("Ready to start?")
-
-    def stage(self, title: str) -> None:
-        self._stage_number += 1
-        print(f"\n▸ Stage {self._stage_number}/{len(STAGE_NAMES)} · {title}\n")
-
-    def say(self, message: str) -> None:
-        print(f"  {message}")
-
-    def step(self, message: str) -> None:
-        print(f"  • {message}")
-
-    def note(self, message: str) -> None:
-        print(f"  {message}")
-
-    def warn(self, message: str) -> None:
-        print(f"  ⚠ {message}")
-
-    def pause(self, message: str = "Press Enter to continue") -> None:
-        input(f"  {message} ")
-
-    def confirm(self, question: str) -> bool:
-        return input(f"  ? {question} [y/N] ").strip().lower().startswith("y")
-
-    def ask(self, key: str, prompt: str) -> str:
-        current = self._existing(key)
-        suffix = " [Enter keeps current]" if current else ""
-        value = input(f"  {prompt}{suffix} ")
-        return value or current
-
-    def ask_default(self, prompt: str, default: str) -> str:
-        value = input(f"  {prompt} [{default}] ")
-        return value or default
-
-    def show_file(self, path: Path) -> None:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            print(f"  {line}")
-
-    def finish(self, artifacts: ProvisioningArtifacts, environment_file: Path) -> None:
-        print("\n  ✓ Setup complete")
-        if artifacts.written_secrets:
-            self.note(f"set {len(artifacts.written_secrets)} GitHub secret(s): "
-                      f"{' '.join(artifacts.written_secrets)}")
-        if artifacts.skipped_actions:
-            print("\n  ⚠ still to do by hand:")
-            for action in artifacts.skipped_actions:
-                self.note(f"  - {action}")
-        self.note(f"Temporary files will be deleted; no credentials were written to {environment_file}.")
-
-    def _existing(self, key: str) -> str:
-        if not self.environment_file.exists():
-            return ""
-        prefix = f"{key}="
-        values = [
-            line[len(prefix):]
-            for line in self.environment_file.read_text(encoding="utf-8").splitlines()
-            if line.startswith(prefix)
-        ]
-        return values[-1] if values else ""
-
-
-class CommandAdapter:
-    """One seam around local subprocess calls."""
-
-    def run(self, args: list[str], **kwargs: object):
-        import subprocess
-
-        return subprocess.run(args, **kwargs)
-
-    def require_commands(self) -> None:
-        _require_commands()
-
-
-class SshAdapter:
-    """SSH and SCP operations used by the provisioning stages."""
-
-    def __init__(self, commands: CommandAdapter) -> None:
-        self.commands = commands
-
-    def run_remote(
-        self,
-        target: str,
-        port: int,
-        command: str,
-        *,
-        check: bool = True,
-    ):
-        return self.commands.run(
-            ["ssh", "-p", str(port), target, command],
-            check=check,
-        )
-
-    def copy_to(self, paths: list[Path], target: str, port: int) -> None:
-        self.commands.run(
-            ["scp", "-P", str(port), *(str(path) for path in paths), target],
-            check=True,
-        )
-
-    def scan_host(self, host: str, port: int) -> str:
-        result = self.commands.run(
-            ["ssh-keyscan", "-p", str(port), host],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        if not result.stdout.strip():
-            raise ProvisioningError("no SSH host keys received")
-        return result.stdout
-
-    def show_fingerprints(self, known_hosts: Path) -> str:
-        result = self.commands.run(
-            ["ssh-keygen", "-lf", str(known_hosts)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return result.stdout.strip()
-
-
-def _devnull():
-    import subprocess
-
-    return subprocess.DEVNULL
-
-
-class GitHubAdapter:
-    """The GitHub CLI operations used by stages six and seven."""
-
-    def __init__(self, commands: CommandAdapter) -> None:
-        self.commands = commands
-
-    def authenticate(self) -> bool:
-        result = self.commands.run(
-            ["gh", "auth", "status"],
-            check=False,
-            stdout=_devnull(),
-            stderr=_devnull(),
-        )
-        return result.returncode == 0
-
-    def set_secret(self, name: str, value: str) -> bool:
-        result = self.commands.run(
-            ["gh", "secret", "set", name],
-            input=value,
-            text=True,
-            check=False,
-            stdout=_devnull(),
-            stderr=_devnull(),
-        )
-        return result.returncode == 0
-
-    def set_variable(self, name: str, value: str) -> bool:
-        result = self.commands.run(
-            ["gh", "variable", "set", name, "--body", value],
-            check=False,
-            stdout=_devnull(),
-            stderr=_devnull(),
-        )
-        return result.returncode == 0
-
-    def default_branch(self) -> str:
-        result = self.commands.run(
-            ["gh", "repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return result.stdout.strip()
-
-    def dispatch_smoke(self, workflow: str, branch: str, nonce: str) -> None:
-        self.commands.run(
-            ["gh", "workflow", "run", workflow, "--ref", branch, "-f", f"nonce={nonce}"],
-            check=True,
-        )
-
-    def wait_for_smoke_run(
-        self,
-        workflow: str,
-        branch: str,
-        nonce: str,
-        *,
-        attempts: int = 10,
-        delay_seconds: float = 2,
-    ) -> int:
-        import json
-        import time
-
-        expected_title = f"Conan Access Smoke {nonce}"
-        for attempt in range(attempts):
-            result = self.commands.run(
-                [
-                    "gh", "run", "list", "--workflow", workflow,
-                    "--branch", branch, "--event", "workflow_dispatch",
-                    "--limit", "20", "--json", "databaseId,displayTitle",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            for run in json.loads(result.stdout):
-                if run.get("displayTitle") == expected_title:
-                    return int(run["databaseId"])
-            if attempt + 1 < attempts:
-                time.sleep(delay_seconds)
-        raise ProvisioningError(f"could not find smoke workflow run: {expected_title}")
-
-    def watch_run(self, run_id: int) -> None:
-        self.commands.run(["gh", "run", "watch", str(run_id), "--exit-status"], check=True)
 
 
 def collect_config(ui: ConsoleUi) -> ProvisioningConfig:
@@ -375,16 +158,6 @@ def collect_config(ui: ConsoleUi) -> ProvisioningConfig:
     )
 
 
-def _quote(value: str) -> str:
-    return shlex.quote(value)
-
-
-def _require_commands() -> None:
-    for command in ("gh", "scp", "ssh", "ssh-keygen", "ssh-keyscan"):
-        if shutil.which(command) is None:
-            raise ProvisioningError(f"missing command: {command}")
-
-
 def _load_conan_username(policy_path: Path) -> str:
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
     username = str(policy.get("username", ""))
@@ -429,18 +202,12 @@ def _prepare_identity(
     lockfile: Path,
     policy_path: Path,
     work_dir: Path,
-    commands: CommandAdapter,
+    commands: LocalCommandAdapter,
 ) -> None:
     timestamp = datetime.now(timezone.utc).date().isoformat()
     artifacts.key_id = f"ros-sdk-github-actions-{timestamp}-{secrets.token_hex(4)}"
     artifacts.private_key = work_dir / "id_ed25519"
-    commands.run(
-        [
-            "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C",
-            artifacts.key_id, "-f", str(artifacts.private_key),
-        ],
-        check=True,
-    )
+    commands.create_identity(artifacts.private_key, artifacts.key_id)
     if not config.old_key_id or config.emergency_key_id:
         artifacts.conan_password = base64.b64encode(secrets.token_bytes(32)).decode()
     _write_secure(work_dir / "conan_password", artifacts.conan_password + "\n")
@@ -450,8 +217,8 @@ def _prepare_identity(
 def _preflight(
     config: ProvisioningConfig,
     repo_root: Path,
-    commands: CommandAdapter,
-    ssh: SshAdapter,
+    commands: LocalCommandAdapter,
+    ssh: FabricSshAdapter,
     github: GitHubAdapter,
     ui: ConsoleUi,
 ) -> None:
@@ -463,16 +230,12 @@ def _preflight(
     validate_config(config)
     if config.emergency_key_id:
         script = repo_root / "scripts/ci/apply_conan_ssh_policy.sh"
-        remote_script = "/tmp/apply-conan-ssh-policy.sh"
-        ssh.copy_to([script], f"{config.server_admin_target}:{remote_script}", config.server_admin_port)
-        ssh.run_remote(
+        ssh.revoke_key(
             config.server_admin_target,
             config.server_admin_port,
-            "sudo bash {script} remove {user} {key}; rm -f {script}".format(
-                script=_quote(remote_script),
-                user=_quote(config.emergency_ssh_user),
-                key=_quote(config.emergency_key_id),
-            ),
+            script,
+            config.emergency_ssh_user,
+            config.emergency_key_id,
         )
         ui.say("The suspected key was revoked before any replacement was created.")
 
@@ -480,15 +243,14 @@ def _preflight(
 def _host_identity(
     config: ProvisioningConfig,
     artifacts: ProvisioningArtifacts,
-    work_dir: Path,
-    ssh: SshAdapter,
+    commands: LocalCommandAdapter,
     ui: ConsoleUi,
 ) -> None:
     assert artifacts.known_hosts is not None
-    host_keys = ssh.scan_host(config.conan_ssh_host, config.conan_ssh_port)
+    host_keys = commands.scan_host(config.conan_ssh_host, config.conan_ssh_port)
     artifacts.known_hosts.write_text(host_keys, encoding="utf-8")
     artifacts.known_hosts.chmod(0o600)
-    ui.say(ssh.show_fingerprints(artifacts.known_hosts))
+    ui.say(commands.show_fingerprints(artifacts.known_hosts))
     if not ui.confirm(
         "Do these fingerprints exactly match the independently verified server fingerprints?"
     ):
@@ -500,16 +262,14 @@ def _server_ssh_policy(
     config: ProvisioningConfig,
     artifacts: ProvisioningArtifacts,
     repo_root: Path,
-    ssh: SshAdapter,
+    ssh: FabricSshAdapter,
     ui: ConsoleUi,
 ) -> None:
     assert artifacts.policy_directory is not None
     artifacts.remote_directory = f"/tmp/ros-sdk-conan-{artifacts.key_id}"
     remote = f"{config.server_admin_target}:{artifacts.remote_directory}/"
-    ssh.run_remote(
-        config.server_admin_target,
-        config.server_admin_port,
-        f"mkdir -m 700 {_quote(artifacts.remote_directory)}",
+    ssh.create_remote_directory(
+        config.server_admin_target, config.server_admin_port, artifacts.remote_directory
     )
     ssh.copy_to(
         [
@@ -525,15 +285,12 @@ def _server_ssh_policy(
     ui.show_file(artifacts.policy_directory / "sshd_config")
     if not ui.confirm("Install this dedicated account policy and reload sshd?"):
         raise ProvisioningError("server SSH policy was not confirmed")
-    ssh.run_remote(
+    ssh.install_ssh_policy(
         config.server_admin_target,
         config.server_admin_port,
-        "sudo bash {script} install {user} {key} {remote}".format(
-            script=_quote(f"{artifacts.remote_directory}/apply_conan_ssh_policy.sh"),
-            user=_quote(config.ssh_user),
-            key=_quote(artifacts.key_id),
-            remote=_quote(artifacts.remote_directory),
-        ),
+        artifacts.remote_directory,
+        config.ssh_user,
+        artifacts.key_id,
     )
     ui.say("The account has no login shell; sshd also denies PTY, agent/X11, remote and arbitrary forwarding.")
 
@@ -542,7 +299,7 @@ def _conan_identity(
     config: ProvisioningConfig,
     artifacts: ProvisioningArtifacts,
     repo_root: Path,
-    ssh: SshAdapter,
+    ssh: FabricSshAdapter,
     ui: ConsoleUi,
 ) -> None:
     assert artifacts.policy_directory is not None
@@ -565,24 +322,15 @@ def _conan_identity(
         f"{config.server_admin_target}:{artifacts.remote_directory}/",
         config.server_admin_port,
     )
-    ssh.run_remote(
+    ssh.install_conan_identity(
         config.server_admin_target,
         config.server_admin_port,
-        "sudo python3 {updater} --config {config} --username {username} "
-        "--password-file {password} --plugin {plugin} --policy {policy}".format(
-            updater=_quote(f"{artifacts.remote_directory}/apply_conan_server_config.py"),
-            config=_quote(config.conan_server_config),
-            username=_quote(artifacts.conan_username),
-            password=_quote(f"{artifacts.remote_directory}/conan_password"),
-            plugin=_quote(f"{artifacts.remote_directory}/conan_exact_reader_authorizer.py"),
-            policy=_quote(f"{artifacts.remote_directory}/conan_policy.json"),
-        ),
+        artifacts.remote_directory,
+        config.conan_server_config,
+        artifacts.conan_username,
     )
-    restart = ssh.run_remote(
-        config.server_admin_target,
-        config.server_admin_port,
-        f"sudo systemctl restart {_quote(config.conan_service)}",
-        check=False,
+    restart = ssh.restart_service(
+        config.server_admin_target, config.server_admin_port, config.conan_service
     )
     if restart.returncode != 0:
         ui.warn("The config is updated, but systemd could not restart the Conan service.")
@@ -610,25 +358,15 @@ def _repository_secrets(
     if artifacts.conan_password:
         secret_values["CONAN_PASSWORD"] = artifacts.conan_password
     for name, value in secret_values.items():
-        if github.set_secret(name, value):
-            artifacts.written_secrets.append(name)
-            ui.say(f"✓ set GitHub secret {name}")
-        else:
-            action = f"GitHub secret {name} (set it manually: gh secret set {name})"
-            artifacts.skipped_actions.append(action)
-            ui.warn(f"skipped GitHub secret {name}: gh not ready; set it later")
+        github.set_secret(name, value)
+        artifacts.written_secrets.append(name)
+        ui.say(f"✓ set GitHub secret {name}")
     artifacts.rotate_after = str(date.today() + timedelta(days=180))
     for name, value in {
         "CONAN_SSH_KEY_ID": artifacts.key_id,
         "CONAN_SSH_ROTATE_AFTER": artifacts.rotate_after,
     }.items():
-        if not github.set_variable(name, value):
-            artifacts.skipped_actions.append(f"GitHub variable {name}")
-            ui.warn(f"skipped GitHub variable {name}, gh not ready; set it later")
-    if artifacts.skipped_actions:
-        raise ProvisioningError(
-            "every repository secret and variable must be updated before smoke testing"
-        )
+        github.set_variable(name, value)
     if not artifacts.conan_password:
         ui.say("Keeping the existing Conan password during overlap key rotation.")
     ui.say("Secrets were streamed to GitHub CLI and will be deleted from local temporary storage on exit.")
@@ -638,7 +376,7 @@ def _smoke_and_rotate(
     config: ProvisioningConfig,
     artifacts: ProvisioningArtifacts,
     repo_root: Path,
-    ssh: SshAdapter,
+    ssh: FabricSshAdapter,
     github: GitHubAdapter,
     ui: ConsoleUi,
 ) -> None:
@@ -653,16 +391,12 @@ def _smoke_and_rotate(
         if not ui.confirm(f"Smoke passed. Remove old key {config.old_key_id} now?"):
             raise ProvisioningError("old key removal was not confirmed")
         script = repo_root / "scripts/ci/apply_conan_ssh_policy.sh"
-        remote_script = "/tmp/apply-conan-ssh-policy.sh"
-        ssh.copy_to([script], f"{config.server_admin_target}:{remote_script}", config.server_admin_port)
-        ssh.run_remote(
+        ssh.revoke_key(
             config.server_admin_target,
             config.server_admin_port,
-            "sudo bash {script} remove {user} {key}; rm -f {script}".format(
-                script=_quote(remote_script),
-                user=_quote(config.ssh_user),
-                key=_quote(config.old_key_id),
-            ),
+            script,
+            config.ssh_user,
+            config.old_key_id,
         )
     ui.say(f"Rotate again by {artifacts.rotate_after}: add new key, update Secrets, verify, then remove this key.")
     ui.say("For suspected leakage, re-run and provide the compromised key ID in Stage 1 for immediate revocation.")
@@ -671,15 +405,12 @@ def _smoke_and_rotate(
 def _remove_remote_directory(
     config: ProvisioningConfig,
     artifacts: ProvisioningArtifacts,
-    ssh: SshAdapter,
+    ssh: FabricSshAdapter,
 ) -> None:
     if not artifacts.remote_directory:
         return
-    ssh.run_remote(
-        config.server_admin_target,
-        config.server_admin_port,
-        f"rm -rf {_quote(artifacts.remote_directory)}",
-        check=False,
+    ssh.remove_remote_directory(
+        config.server_admin_target, config.server_admin_port, artifacts.remote_directory
     )
     artifacts.remote_directory = ""
 
@@ -689,15 +420,15 @@ def run_provisioning(
     *,
     repo_root: Path | None = None,
     ui: ConsoleUi | None = None,
-    commands: CommandAdapter | None = None,
-    ssh: SshAdapter | None = None,
+    commands: LocalCommandAdapter | None = None,
+    ssh: FabricSshAdapter | None = None,
     github: GitHubAdapter | None = None,
 ) -> ProvisioningArtifacts:
     """Run the seven Conan CI access stages in a fixed, readable order."""
     root = repo_root or Path(__file__).resolve().parents[2]
     terminal = ui or ConsoleUi(root / ".env")
-    command_adapter = commands or CommandAdapter()
-    ssh_adapter = ssh or SshAdapter(command_adapter)
+    command_adapter = commands or LocalCommandAdapter()
+    ssh_adapter = ssh or FabricSshAdapter(command_adapter)
     github_adapter = github or GitHubAdapter(command_adapter)
     terminal.banner()
     terminal.stage(STAGE_NAMES[0])
@@ -721,7 +452,7 @@ def run_provisioning(
         # The identity directory is the parent of all temporary artifacts.
         work_dir = artifacts.private_key.parent if artifacts.private_key else Path(tempfile.mkdtemp())
         artifacts.known_hosts = work_dir / "known_hosts"
-        _host_identity(config, artifacts, work_dir, ssh_adapter, terminal)
+        _host_identity(config, artifacts, command_adapter, terminal)
 
         terminal.stage(STAGE_NAMES[3])
         _server_ssh_policy(config, artifacts, root, ssh_adapter, terminal)
@@ -744,8 +475,6 @@ def run_provisioning(
 
 
 def main(argv: list[str] | None = None) -> int:
-    import argparse
-
     parser = argparse.ArgumentParser(
         prog="./scripts/provision_conan_ci.sh",
         description="Provision restricted Conan CI access through a seven-stage wizard"
@@ -753,7 +482,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.parse_args(argv)
     try:
         run_provisioning()
-    except (ProvisioningError, ValueError, OSError) as error:
+    except (AdapterError, ProvisioningError, ValueError, OSError) as error:
         print(f"error: {error}")
         return 1
     return 0

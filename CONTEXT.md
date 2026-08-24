@@ -5,9 +5,9 @@ RosBridge Pro 将机器人能力表达为稳定的领域操作，并把 ROS 2 �
 
 ## 领域语言
 
-**Conan CI 访问配置编排**：为受限 Conan CI 访问准备 SSH 身份、服务器端策略、GitHub 配置和
-可信 smoke 验证的七步流程；Shell 只提供稳定入口，Python 负责按顺序编排外部副作用。
-_避免_：Conan CI SSH 向导、单纯的 SSH 配置、可恢复的后台任务
+**Conan CI 访问凭据配置流程**：维护者为只读 Conan CI 身份准备凭据、访问策略并完成可信验证的
+一次性流程；它包含凭据轮换和紧急撤销语义。
+_避免_：Conan CI 访问配置编排、Conan CI SSH 向导、普通 CI 构建流程
 
 **配送请求（Delivery Request）**：
 配送客户端提出的任务创建意图，包含一个取货地点和一个送达地点。

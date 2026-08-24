@@ -14,11 +14,14 @@ private-key and password files use owner-only permissions and are deleted on exi
 
 ## Code layout
 
-This flow is called **Conan CI 访问配置编排**. The stable shell command is only the entry point. The
-Python module `scripts/ci/conan_access_provisioning.py` owns the seven stages in order, while the
-`SshAdapter`, `GitHubAdapter`, and `CommandAdapter` keep external commands at explicit seams. The
-wizard stops at the first failed stage; re-running it performs the checks again instead of resuming a
-partially saved progress file.
+This flow is called **Conan CI 访问凭据配置流程**. The stable shell command is only the entry point.
+`conan_access_provisioning.py` owns the seven stages, `conan_access_provisioning_ui.py` owns Rich
+prompts and previews, and `conan_access_provisioning_adapters.py` owns Fabric, PyGithub and local
+commands. Fabric handles remote SSH administration, PyGithub handles GitHub repository configuration,
+and Rich handles terminal presentation. A small `ssh-keyscan` step collects the Conan endpoint's host
+fingerprints for the later smoke connection. The wizard stops at the
+first failed stage; re-running it performs the checks again instead of resuming a partially saved
+progress file.
 
 The Python code intentionally uses small data classes and ordinary functions. The single complete-flow
 test uses fake adapters, so the stage order can be checked without contacting a real server or GitHub.
@@ -76,7 +79,8 @@ settings before reloading the daemon. These options follow the OpenSSH
 
 ## GitHub configuration
 
-The wizard streams these repository Secrets through `gh secret set`:
+The wizard writes these repository Secrets through PyGithub. The `gh` CLI is used only to obtain the
+maintainer's in-memory authentication token:
 
 | Secret | Purpose |
 |---|---|
