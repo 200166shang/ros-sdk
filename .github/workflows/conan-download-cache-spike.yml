@@ -274,7 +274,7 @@ jobs:
           printf 'Docker bridge gateway: %s\n' "$docker_gateway"
 
           tunnel_log="$state_dir/ssh-connect.log"
-          if ! ssh -F /dev/null -M -S "$control_socket" -f -N \
+          ssh -F /dev/null -M -S "$control_socket" -N \
             -o GlobalKnownHostsFile=/dev/null \
             -o ProxyCommand=none \
             -o ProxyJump=none \
@@ -294,9 +294,24 @@ jobs:
             -p "$port" \
             -l "$user" \
             -L "$docker_gateway:19300:127.0.0.1:9300" \
-            "$host" >"$tunnel_log" 2>&1; then
-            :
-          else
+            "$host" >"$tunnel_log" 2>&1 &
+          ssh_launch_pid=$!
+          if ! (umask 077; printf '%s\n' "$ssh_launch_pid" > "$master_pid_file") \
+            2>/dev/null; then
+            fail_tunnel_setup
+          fi
+          tunnel_ready=false
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if [[ -S "$control_socket" ]]; then
+              tunnel_ready=true
+              break
+            fi
+            if ! kill -0 "$ssh_launch_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$tunnel_ready" != "true" ]]; then
             tunnel_error=$(tail -n 3 "$tunnel_log" 2>/dev/null || true)
             if [[ -n "$tunnel_error" ]]; then
               printf '%s\n' "$tunnel_error" >&2
@@ -320,6 +335,9 @@ jobs:
           fi
           master_pid=${BASH_REMATCH[1]}
           if (( master_pid <= 1 )); then
+            fail_tunnel_setup
+          fi
+          if [[ "$master_pid" != "$ssh_launch_pid" ]]; then
             fail_tunnel_setup
           fi
           if ! (umask 077; printf '%s\n' "$master_pid" > "$master_pid_file") \
