@@ -340,21 +340,41 @@ jobs:
         shell: bash
         run: |
           set +e
+          fail_credential_cleanup() {
+            echo "Credential state cleanup failed" >&2
+            exit 1
+          }
+
           python3 -m scripts.ci compose-down
-          cleanup_status=$?
-          set -e
+          credential_volume=conan-download-cache-spike_conan_cache
+          if [[ "$credential_volume" != "conan-download-cache-spike_conan_cache" ]]; then
+            fail_credential_cleanup
+          fi
 
           if docker inspect ros2 >/dev/null 2>&1; then
             docker rm --force ros2 >/dev/null 2>&1 || true
           fi
-          if docker inspect ros2 >/dev/null 2>&1; then
-            echo "Credential container cleanup failed" >&2
-            exit 1
+          if docker volume inspect "$credential_volume" >/dev/null 2>&1; then
+            docker volume rm "$credential_volume" >/dev/null 2>&1 || true
           fi
+          if ! remaining_containers=$(docker container ls --all \
+            --filter 'name=^/ros2$' --format '{{.Names}}' 2>/dev/null); then
+            fail_credential_cleanup
+          fi
+          if ! remaining_volumes=$(docker volume ls \
+            --filter 'name=^conan-download-cache-spike_conan_cache$' \
+            --format '{{.Name}}' 2>/dev/null); then
+            fail_credential_cleanup
+          fi
+          if [[ -n "$remaining_containers" || -n "$remaining_volumes" ]]; then
+            fail_credential_cleanup
+          fi
+          unset remaining_containers remaining_volumes
           echo "safe=true" >> "$GITHUB_OUTPUT"
-          exit "$cleanup_status"
+          exit 0
 
       - name: Close encrypted Conan tunnel
+        id: ssh-cleanup
         if: always()
         env:
           CONAN_SSH_HOST: ${{ secrets.CONAN_SSH_HOST }}
@@ -363,6 +383,11 @@ jobs:
         shell: bash
         run: |
           set +e
+          fail_ssh_cleanup() {
+            echo "ARM64 dependency preparation required: SSH tunnel cleanup failed" >&2
+            exit 1
+          }
+
           state_dir="$RUNNER_TEMP/conan-ssh-tunnel"
           key_file="$state_dir/id_ci"
           known_hosts_file="$state_dir/known_hosts"
@@ -375,19 +400,63 @@ jobs:
               -l "$CONAN_SSH_USER" \
               "$CONAN_SSH_HOST" >/dev/null 2>&1 || true
           fi
+
+          if ! command -v ss >/dev/null 2>&1; then
+            fail_ssh_cleanup
+          fi
+          tunnel_stopped=false
+          for attempt in 1 2 3 4 5; do
+            master_active=false
+            if [[ -S "$control_socket" && -n "${CONAN_SSH_HOST:-}" && \
+                  -n "${CONAN_SSH_USER:-}" && -n "${CONAN_SSH_PORT:-}" ]] && \
+              ssh -S "$control_socket" -O check \
+                -p "$CONAN_SSH_PORT" \
+                -l "$CONAN_SSH_USER" \
+                "$CONAN_SSH_HOST" >/dev/null 2>&1; then
+              master_active=true
+            fi
+            if ! listeners=$(ss -H -ltn 'sport = :19300' 2>/dev/null); then
+              fail_ssh_cleanup
+            fi
+            if [[ "$master_active" == "false" && -z "$listeners" ]]; then
+              tunnel_stopped=true
+              break
+            fi
+            sleep 1
+          done
+          unset listeners
+          if [[ "$tunnel_stopped" != "true" ]]; then
+            fail_ssh_cleanup
+          fi
+
           if command -v shred >/dev/null 2>&1; then
             shred -u "$key_file" "$known_hosts_file" >/dev/null 2>&1 || true
           fi
           rm -f "$key_file" "$known_hosts_file" "$control_socket" >/dev/null 2>&1 || true
           rmdir "$state_dir" >/dev/null 2>&1 || true
+          if [[ -e "$key_file" || -L "$key_file" || \
+                -e "$known_hosts_file" || -L "$known_hosts_file" || \
+                -e "$control_socket" || -L "$control_socket" || \
+                -e "$state_dir" || -L "$state_dir" ]]; then
+            fail_ssh_cleanup
+          fi
+          echo "safe=true" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Record cache save start
-        if: success() && steps.conan-cache.outputs.cache-hit != 'true'
+        if: >-
+          success() &&
+          steps.credential-container-cleanup.outputs.safe == 'true' &&
+          steps.ssh-cleanup.outputs.safe == 'true' &&
+          steps.conan-cache.outputs.cache-hit != 'true'
         run: date +%s%3N > .cache/conan-spike/save-start-ms
 
       - name: Save Conan download cache
-        if: success() && steps.conan-cache.outputs.cache-hit != 'true'
+        if: >-
+          success() &&
+          steps.credential-container-cleanup.outputs.safe == 'true' &&
+          steps.ssh-cleanup.outputs.safe == 'true' &&
+          steps.conan-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .cache/conan-download
@@ -395,7 +464,11 @@ jobs:
 
       - name: Measure cache save
         id: save-timing
-        if: success() && steps.conan-cache.outputs.cache-hit != 'true'
+        if: >-
+          success() &&
+          steps.credential-container-cleanup.outputs.safe == 'true' &&
+          steps.ssh-cleanup.outputs.safe == 'true' &&
+          steps.conan-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           python3 - <<'PY'
@@ -410,6 +483,10 @@ jobs:
           PY
 
       - name: Write result and job summary
+        if: >-
+          success() &&
+          steps.credential-container-cleanup.outputs.safe == 'true' &&
+          steps.ssh-cleanup.outputs.safe == 'true'
         env:
           CACHE_HIT: ${{ steps.conan-cache.outputs.cache-hit == 'true' }}
           RESTORE_SECONDS: ${{ steps.restore-timing.outputs.seconds }}
@@ -440,6 +517,10 @@ jobs:
             --sha "$GITHUB_SHA"
 
       - name: Upload result
+        if: >-
+          success() &&
+          steps.credential-container-cleanup.outputs.safe == 'true' &&
+          steps.ssh-cleanup.outputs.safe == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: conan-cache-spike-${{ github.run_id }}-${{ github.run_attempt }}
@@ -449,7 +530,10 @@ jobs:
           retention-days: 7
 
       - name: Upload diagnostics after failure
-        if: failure() && steps.credential-container-cleanup.outputs.safe == 'true'
+        if: >-
+          failure() &&
+          steps.credential-container-cleanup.outputs.safe == 'true' &&
+          steps.ssh-cleanup.outputs.safe == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: conan-cache-spike-failure-${{ github.run_id }}-${{ github.run_attempt }}
