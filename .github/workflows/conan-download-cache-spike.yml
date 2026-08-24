@@ -4,6 +4,21 @@ on:
   push:
     branches:
       - prototype/conan-download-cache
+  workflow_dispatch:
+    inputs:
+      sample_role:
+        description: "Spike sample role"
+        required: false
+        default: baseline
+        type: choice
+        options:
+          - baseline
+          - recovery
+      cache_generation:
+        description: "Download cache generation"
+        required: false
+        default: v1
+        type: string
 
 permissions:
   contents: read
@@ -23,8 +38,8 @@ env:
   CONAN_BUILD_POLICY: never
   CONAN_REQUIRE_REMOTE: "true"
   CONAN_GRAPH_FILE: /workspace/.cache/conan-spike/install-graph.json
-  CACHE_GENERATION: v1
-  SAMPLE_ROLE: baseline
+  CACHE_GENERATION: ${{ inputs.cache_generation || 'v1' }}
+  SAMPLE_ROLE: ${{ inputs.sample_role || 'baseline' }}
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
 
 jobs:
