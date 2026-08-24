@@ -133,6 +133,10 @@ Dockerfile 提供两个构建目标：本地 Compose 默认使用包含 Gazebo�
 的 `dev` 目标；GitHub Actions 使用只包含编译、测试和静态分析依赖的 `ci` 目标。模拟器
 环境继续服务本地开发，不作为 CI 镜像的一部分。
 
+维护者首次建立或轮换受限 Conan CI 身份时，使用
+[Conan CI 接入向导](docs/ci/conan-access-provisioning.md)。向导会配置专用 SSH 转发身份、
+只读 Conan 凭据、GitHub Secrets、受信任 smoke test 以及 180 天轮换/紧急撤销流程。
+
 ## 仓库结构
 
 ```text
