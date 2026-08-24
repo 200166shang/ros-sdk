@@ -129,6 +129,9 @@ macOS + Colima 用户如果 Docker socket 未自动配置，先设置
 PR 中构建临时镜像进行验证。环境变更合入 `main` 并通过验证后，GitHub Actions 会更新
 `ghcr.io/200166shang/ros-sdk:ci-arm64-main`。项目不保存每个 PR 或 commit 的临时镜像。
 
+PR 的 Lint 会对全部 C++ 文件执行 `clang-format`，并只对该 PR 修改且仍存在的 `.cpp` 文件
+执行并行 `clang-tidy`；没有 PR base/head 范围时会明确跳过 `clang-tidy`。
+
 Dockerfile 提供两个构建目标：本地 Compose 默认使用包含 Gazebo、TurtleBot3 和 ros-gz
 的 `dev` 目标；GitHub Actions 使用只包含编译、测试和静态分析依赖的 `ci` 目标。模拟器
 环境继续服务本地开发，不作为 CI 镜像的一部分。
