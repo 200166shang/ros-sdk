@@ -42,16 +42,6 @@ jobs:
       - name: Create measurement directories
         run: mkdir -p .cache/conan-download .cache/conan-spike
 
-      - name: Validate secure Conan remote configuration
-        env:
-          CONAN_REMOTE_URL: ${{ secrets.CONAN_REMOTE_URL }}
-        shell: bash
-        run: |
-          if [[ ! "${CONAN_REMOTE_URL:-}" =~ ^https://[^/[:space:]]+(/[^[:space:]]*)?$ ]]; then
-            echo "ARM64 dependency preparation required: secure Conan remote is not configured" >&2
-            exit 1
-          fi
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -74,10 +64,107 @@ jobs:
             sleep 5
           done
 
+      - name: Establish encrypted Conan tunnel
+        env:
+          CONAN_SSH_HOST: ${{ secrets.CONAN_SSH_HOST }}
+          CONAN_SSH_USER: ${{ secrets.CONAN_SSH_USER }}
+          CONAN_SSH_PRIVATE_KEY: ${{ secrets.CONAN_SSH_PRIVATE_KEY }}
+          CONAN_SSH_KNOWN_HOSTS: ${{ secrets.CONAN_SSH_KNOWN_HOSTS }}
+          CONAN_SSH_PORT: ${{ secrets.CONAN_SSH_PORT || '22' }}
+        shell: bash
+        run: |
+          set -u
+
+          fail_tunnel_setup() {
+            echo "SSH tunnel setup failed" >&2
+            exit 1
+          }
+
+          host=${CONAN_SSH_HOST:-}
+          user=${CONAN_SSH_USER:-}
+          port=${CONAN_SSH_PORT:-}
+          private_key=${CONAN_SSH_PRIVATE_KEY:-}
+          known_hosts=${CONAN_SSH_KNOWN_HOSTS:-}
+
+          if [[ -z "$host" || -z "$user" || -z "$port" || \
+                -z "$private_key" || -z "$known_hosts" ]]; then
+            fail_tunnel_setup
+          fi
+          if (( ${#host} > 253 )) || [[ "$host" == *..* ]]; then
+            fail_tunnel_setup
+          fi
+          IFS='.' read -r -a host_labels <<< "$host"
+          for label in "${host_labels[@]}"; do
+            if [[ ! "$label" =~ ^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]{0,61}[A-Za-z0-9])$ ]]; then
+              fail_tunnel_setup
+            fi
+          done
+          if [[ ! "$user" =~ ^[A-Za-z_][A-Za-z0-9._-]{0,31}$ ]]; then
+            fail_tunnel_setup
+          fi
+          if [[ ! "$port" =~ ^[0-9]{1,5}$ ]]; then
+            fail_tunnel_setup
+          fi
+          port=$((10#$port))
+          if (( port < 1 || port > 65535 )); then
+            fail_tunnel_setup
+          fi
+
+          state_dir="$RUNNER_TEMP/conan-ssh-tunnel"
+          key_file="$state_dir/id_ci"
+          known_hosts_file="$state_dir/known_hosts"
+          control_socket="$state_dir/control"
+
+          if ! install -d -m 700 "$state_dir" >/dev/null 2>&1; then
+            fail_tunnel_setup
+          fi
+          if ! (umask 077; printf '%s\n' "$private_key" > "$key_file") 2>/dev/null; then
+            fail_tunnel_setup
+          fi
+          if ! (umask 077; printf '%s\n' "$known_hosts" > "$known_hosts_file") 2>/dev/null; then
+            fail_tunnel_setup
+          fi
+          unset private_key known_hosts CONAN_SSH_PRIVATE_KEY CONAN_SSH_KNOWN_HOSTS
+
+          if ! ssh-keygen -y -P '' -f "$key_file" >/dev/null 2>&1; then
+            fail_tunnel_setup
+          fi
+          known_host_token=$host
+          if (( port != 22 )); then
+            known_host_token="[$host]:$port"
+          fi
+          if ! ssh-keygen -F "$known_host_token" -f "$known_hosts_file" \
+            >/dev/null 2>&1; then
+            fail_tunnel_setup
+          fi
+
+          if ! ssh -M -S "$control_socket" -f -N \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts_file" \
+            -o ExitOnForwardFailure=yes \
+            -o GatewayPorts=yes \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            -i "$key_file" \
+            -p "$port" \
+            -l "$user" \
+            -L 0.0.0.0:19300:127.0.0.1:9300 \
+            "$host" >/dev/null 2>&1; then
+            fail_tunnel_setup
+          fi
+          if [[ ! -S "$control_socket" ]] || \
+            ! ssh -S "$control_socket" -O check -p "$port" -l "$user" "$host" \
+              >/dev/null 2>&1; then
+            fail_tunnel_setup
+          fi
+          echo "SSH tunnel established"
+
       - name: Start only the ROS 2 service
         env:
-          CONAN_REMOTE_URL: ${{ secrets.CONAN_REMOTE_URL }}
-          CONAN_LOGIN_USERNAME: ci-reader
+          CONAN_REMOTE_URL: http://host.docker.internal:19300
+          CONAN_LOGIN_USERNAME: ${{ secrets.CONAN_LOGIN_USERNAME }}
           CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
         run: python3 -m scripts.ci compose-up
 
@@ -166,7 +253,7 @@ jobs:
 
       - name: Verify required Conan remote
         env:
-          CONAN_REMOTE_URL: ${{ secrets.CONAN_REMOTE_URL }}
+          CONAN_REMOTE_URL: http://host.docker.internal:19300
         shell: bash
         run: |
           if verification_output=$(python3 -m scripts.ci verify-conan 2>&1); then
@@ -295,3 +382,31 @@ jobs:
       - name: Stop the ROS 2 service
         if: always()
         run: python3 -m scripts.ci compose-down
+
+      - name: Close encrypted Conan tunnel
+        if: always()
+        env:
+          CONAN_SSH_HOST: ${{ secrets.CONAN_SSH_HOST }}
+          CONAN_SSH_USER: ${{ secrets.CONAN_SSH_USER }}
+          CONAN_SSH_PORT: ${{ secrets.CONAN_SSH_PORT || '22' }}
+        shell: bash
+        run: |
+          set +e
+          state_dir="$RUNNER_TEMP/conan-ssh-tunnel"
+          key_file="$state_dir/id_ci"
+          known_hosts_file="$state_dir/known_hosts"
+          control_socket="$state_dir/control"
+
+          if [[ -S "$control_socket" && -n "${CONAN_SSH_HOST:-}" && \
+                -n "${CONAN_SSH_USER:-}" && -n "${CONAN_SSH_PORT:-}" ]]; then
+            ssh -S "$control_socket" -O exit \
+              -p "$CONAN_SSH_PORT" \
+              -l "$CONAN_SSH_USER" \
+              "$CONAN_SSH_HOST" >/dev/null 2>&1 || true
+          fi
+          if command -v shred >/dev/null 2>&1; then
+            shred -u "$key_file" "$known_hosts_file" >/dev/null 2>&1 || true
+          fi
+          rm -f "$key_file" "$known_hosts_file" "$control_socket" >/dev/null 2>&1 || true
+          rmdir "$state_dir" >/dev/null 2>&1 || true
+          exit 0
