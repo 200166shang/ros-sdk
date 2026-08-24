@@ -64,129 +64,6 @@ jobs:
             sleep 5
           done
 
-      - name: Establish encrypted Conan tunnel
-        env:
-          CONAN_SSH_HOST: ${{ secrets.CONAN_SSH_HOST }}
-          CONAN_SSH_USER: ${{ secrets.CONAN_SSH_USER }}
-          CONAN_SSH_PRIVATE_KEY: ${{ secrets.CONAN_SSH_PRIVATE_KEY }}
-          CONAN_SSH_KNOWN_HOSTS: ${{ secrets.CONAN_SSH_KNOWN_HOSTS }}
-          CONAN_SSH_PORT: ${{ secrets.CONAN_SSH_PORT || '22' }}
-        shell: bash
-        run: |
-          set -u
-
-          fail_tunnel_setup() {
-            echo "ARM64 dependency preparation required: SSH tunnel setup failed" >&2
-            exit 1
-          }
-
-          host=${CONAN_SSH_HOST:-}
-          user=${CONAN_SSH_USER:-}
-          port=${CONAN_SSH_PORT:-}
-          private_key=${CONAN_SSH_PRIVATE_KEY:-}
-          known_hosts=${CONAN_SSH_KNOWN_HOSTS:-}
-
-          if [[ -z "$host" || -z "$user" || -z "$port" || \
-                -z "$private_key" || -z "$known_hosts" ]]; then
-            fail_tunnel_setup
-          fi
-          if (( ${#host} > 253 )) || [[ "$host" == *..* ]]; then
-            fail_tunnel_setup
-          fi
-          IFS='.' read -r -a host_labels <<< "$host"
-          for label in "${host_labels[@]}"; do
-            if [[ ! "$label" =~ ^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]{0,61}[A-Za-z0-9])$ ]]; then
-              fail_tunnel_setup
-            fi
-          done
-          if [[ ! "$user" =~ ^[A-Za-z_][A-Za-z0-9._-]{0,31}$ ]]; then
-            fail_tunnel_setup
-          fi
-          if [[ ! "$port" =~ ^[0-9]{1,5}$ ]]; then
-            fail_tunnel_setup
-          fi
-          port=$((10#$port))
-          if (( port < 1 || port > 65535 )); then
-            fail_tunnel_setup
-          fi
-
-          state_dir="$RUNNER_TEMP/conan-ssh-tunnel"
-          key_file="$state_dir/id_ci"
-          known_hosts_file="$state_dir/known_hosts"
-          control_socket="$state_dir/control"
-
-          if ! install -d -m 700 "$state_dir" >/dev/null 2>&1; then
-            fail_tunnel_setup
-          fi
-          if ! (umask 077; printf '%s\n' "$private_key" > "$key_file") 2>/dev/null; then
-            fail_tunnel_setup
-          fi
-          if ! (umask 077; printf '%s\n' "$known_hosts" > "$known_hosts_file") 2>/dev/null; then
-            fail_tunnel_setup
-          fi
-          unset private_key known_hosts CONAN_SSH_PRIVATE_KEY CONAN_SSH_KNOWN_HOSTS
-
-          if ! ssh-keygen -y -P '' -f "$key_file" >/dev/null 2>&1; then
-            fail_tunnel_setup
-          fi
-          known_host_token=$host
-          if (( port != 22 )); then
-            known_host_token="[$host]:$port"
-          fi
-          known_host_records=0
-          while IFS= read -r known_host_line || [[ -n "$known_host_line" ]]; do
-            if [[ "$known_host_line" =~ ^[[:space:]]*$ || \
-                  "$known_host_line" =~ ^[[:space:]]*# ]]; then
-              continue
-            fi
-            record_host=
-            key_type=
-            key_blob=
-            extra_field=
-            read -r record_host key_type key_blob extra_field <<< "$known_host_line"
-            if [[ "$record_host" != "$known_host_token" || -n "$extra_field" ]]; then
-              fail_tunnel_setup
-            fi
-            if [[ ! "$key_type" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))$ ]]; then
-              fail_tunnel_setup
-            fi
-            if (( ${#key_blob} < 16 || ${#key_blob} > 8192 )) || \
-              [[ ! "$key_blob" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]; then
-              fail_tunnel_setup
-            fi
-            known_host_records=$((known_host_records + 1))
-          done < "$known_hosts_file"
-          if (( known_host_records == 0 )); then
-            fail_tunnel_setup
-          fi
-          if ! ssh-keygen -F "$known_host_token" -f "$known_hosts_file" \
-            >/dev/null 2>&1; then
-            fail_tunnel_setup
-          fi
-
-          if ! ssh -M -S "$control_socket" -f -N \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$known_hosts_file" \
-            -o ExitOnForwardFailure=yes \
-            -o GatewayPorts=yes \
-            -o ServerAliveInterval=15 \
-            -o ServerAliveCountMax=3 \
-            -i "$key_file" \
-            -p "$port" \
-            -l "$user" \
-            -L 0.0.0.0:19300:127.0.0.1:9300 \
-            "$host" >/dev/null 2>&1; then
-            fail_tunnel_setup
-          fi
-          if [[ ! -S "$control_socket" ]] || \
-            ! ssh -S "$control_socket" -O check -p "$port" -l "$user" "$host" \
-              >/dev/null 2>&1; then
-            fail_tunnel_setup
-          fi
-          echo "SSH tunnel established"
-
       - name: Start credentialless ROS 2 service
         run: python3 -m scripts.ci compose-up
 
@@ -276,6 +153,172 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"seconds={seconds:.3f}\n")
           PY
+
+      - name: Establish encrypted Conan tunnel
+        env:
+          CONAN_SSH_HOST: ${{ secrets.CONAN_SSH_HOST }}
+          CONAN_SSH_USER: ${{ secrets.CONAN_SSH_USER }}
+          CONAN_SSH_PRIVATE_KEY: ${{ secrets.CONAN_SSH_PRIVATE_KEY }}
+          CONAN_SSH_KNOWN_HOSTS: ${{ secrets.CONAN_SSH_KNOWN_HOSTS }}
+          CONAN_SSH_PORT: ${{ secrets.CONAN_SSH_PORT || '22' }}
+        shell: bash
+        run: |
+          set -u
+
+          fail_tunnel_setup() {
+            echo "ARM64 dependency preparation required: SSH tunnel setup failed" >&2
+            exit 1
+          }
+
+          host=${CONAN_SSH_HOST:-}
+          user=${CONAN_SSH_USER:-}
+          port=${CONAN_SSH_PORT:-}
+          private_key=${CONAN_SSH_PRIVATE_KEY:-}
+          known_hosts=${CONAN_SSH_KNOWN_HOSTS:-}
+
+          if [[ -z "$host" || -z "$user" || -z "$port" || \
+                -z "$private_key" || -z "$known_hosts" ]]; then
+            fail_tunnel_setup
+          fi
+          if (( ${#host} > 253 )) || [[ "$host" == *..* ]]; then
+            fail_tunnel_setup
+          fi
+          IFS='.' read -r -a host_labels <<< "$host"
+          for label in "${host_labels[@]}"; do
+            if [[ ! "$label" =~ ^([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]{0,61}[A-Za-z0-9])$ ]]; then
+              fail_tunnel_setup
+            fi
+          done
+          if [[ ! "$user" =~ ^[A-Za-z_][A-Za-z0-9._-]{0,31}$ ]]; then
+            fail_tunnel_setup
+          fi
+          if [[ ! "$port" =~ ^[0-9]{1,5}$ ]]; then
+            fail_tunnel_setup
+          fi
+          port=$((10#$port))
+          if (( port < 1 || port > 65535 )); then
+            fail_tunnel_setup
+          fi
+
+          state_dir="$RUNNER_TEMP/conan-ssh-tunnel"
+          key_file="$state_dir/id_ci"
+          known_hosts_file="$state_dir/known_hosts"
+          control_socket="$state_dir/control"
+          master_pid_file="$state_dir/master.pid"
+
+          if ! install -d -m 700 "$state_dir" >/dev/null 2>&1; then
+            fail_tunnel_setup
+          fi
+          if ! (umask 077; printf '%s\n' "$private_key" > "$key_file") 2>/dev/null; then
+            fail_tunnel_setup
+          fi
+          if ! (umask 077; printf '%s\n' "$known_hosts" > "$known_hosts_file") 2>/dev/null; then
+            fail_tunnel_setup
+          fi
+          unset private_key known_hosts CONAN_SSH_PRIVATE_KEY CONAN_SSH_KNOWN_HOSTS
+
+          if ! ssh-keygen -y -P '' -f "$key_file" >/dev/null 2>&1; then
+            fail_tunnel_setup
+          fi
+          known_host_token=$host
+          if (( port != 22 )); then
+            known_host_token="[$host]:$port"
+          fi
+          known_host_records=0
+          while IFS= read -r known_host_line || [[ -n "$known_host_line" ]]; do
+            if [[ "$known_host_line" =~ ^[[:space:]]*$ || \
+                  "$known_host_line" =~ ^[[:space:]]*# ]]; then
+              continue
+            fi
+            record_host=
+            key_type=
+            key_blob=
+            extra_field=
+            read -r record_host key_type key_blob extra_field <<< "$known_host_line"
+            if [[ "$record_host" != "$known_host_token" || -n "$extra_field" ]]; then
+              fail_tunnel_setup
+            fi
+            if [[ ! "$key_type" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))$ ]]; then
+              fail_tunnel_setup
+            fi
+            if (( ${#key_blob} < 16 || ${#key_blob} > 8192 )) || \
+              [[ ! "$key_blob" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]; then
+              fail_tunnel_setup
+            fi
+            known_host_records=$((known_host_records + 1))
+          done < "$known_hosts_file"
+          if (( known_host_records == 0 )); then
+            fail_tunnel_setup
+          fi
+          if ! ssh-keygen -F "$known_host_token" -f "$known_hosts_file" \
+            >/dev/null 2>&1; then
+            fail_tunnel_setup
+          fi
+
+          if ! docker_gateway=$(docker network inspect bridge \
+            --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null); then
+            fail_tunnel_setup
+          fi
+          if ! python3 - "$docker_gateway" >/dev/null 2>&1 <<'PY'
+          import ipaddress
+          import sys
+
+          value = sys.argv[1]
+          address = ipaddress.IPv4Address(value)
+          if str(address) != value:
+              raise ValueError("non-canonical IPv4 address")
+          PY
+          then
+            fail_tunnel_setup
+          fi
+
+          if ! ssh -F /dev/null -M -S "$control_socket" -f -N \
+            -o GlobalKnownHostsFile=/dev/null \
+            -o ProxyCommand=none \
+            -o ProxyJump=none \
+            -o CanonicalizeHostname=no \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts_file" \
+            -o ExitOnForwardFailure=yes \
+            -o GatewayPorts=yes \
+            -o ConnectTimeout=10 \
+            -o ConnectionAttempts=1 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            -i "$key_file" \
+            -p "$port" \
+            -l "$user" \
+            -L "$docker_gateway:19300:127.0.0.1:9300" \
+            "$host" >/dev/null 2>&1; then
+            fail_tunnel_setup
+          fi
+          if [[ ! -S "$control_socket" ]]; then
+            fail_tunnel_setup
+          fi
+          if ! master_check=$(ssh -F /dev/null -S "$control_socket" -O check \
+            -o GlobalKnownHostsFile=/dev/null \
+            -o ProxyCommand=none \
+            -o ProxyJump=none \
+            -o CanonicalizeHostname=no \
+            -o UserKnownHostsFile="$known_hosts_file" \
+            -p "$port" -l "$user" "$host" 2>&1); then
+            fail_tunnel_setup
+          fi
+          if [[ ! "$master_check" =~ ^Master\ running\ \(pid=([0-9]+)\)$ ]]; then
+            fail_tunnel_setup
+          fi
+          master_pid=${BASH_REMATCH[1]}
+          if (( master_pid <= 1 )); then
+            fail_tunnel_setup
+          fi
+          if ! (umask 077; printf '%s\n' "$master_pid" > "$master_pid_file") \
+            2>/dev/null; then
+            fail_tunnel_setup
+          fi
+          unset master_check master_pid docker_gateway
+          echo "SSH tunnel established"
 
       - name: Start credential-bearing ROS 2 service
         env:
@@ -392,39 +435,205 @@ jobs:
           key_file="$state_dir/id_ci"
           known_hosts_file="$state_dir/known_hosts"
           control_socket="$state_dir/control"
+          master_pid_file="$state_dir/master.pid"
 
-          if [[ -S "$control_socket" && -n "${CONAN_SSH_HOST:-}" && \
-                -n "${CONAN_SSH_USER:-}" && -n "${CONAN_SSH_PORT:-}" ]]; then
-            ssh -S "$control_socket" -O exit \
-              -p "$CONAN_SSH_PORT" \
-              -l "$CONAN_SSH_USER" \
-              "$CONAN_SSH_HOST" >/dev/null 2>&1 || true
+          control_endpoint_valid=false
+          if [[ "${CONAN_SSH_HOST:-}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ && \
+                "${CONAN_SSH_USER:-}" =~ ^[A-Za-z_][A-Za-z0-9._-]{0,31}$ && \
+                "${CONAN_SSH_PORT:-}" =~ ^[0-9]{1,5}$ ]]; then
+            cleanup_port=$((10#$CONAN_SSH_PORT))
+            if (( cleanup_port >= 1 && cleanup_port <= 65535 )); then
+              control_endpoint_valid=true
+            fi
           fi
+
+          control_command() {
+            local operation=$1
+            ssh -F /dev/null -S "$control_socket" -O "$operation" \
+              -o GlobalKnownHostsFile=/dev/null \
+              -o ProxyCommand=none \
+              -o ProxyJump=none \
+              -o CanonicalizeHostname=no \
+              -o UserKnownHostsFile="$known_hosts_file" \
+              -p "$cleanup_port" \
+              -l "$CONAN_SSH_USER" \
+              "$CONAN_SSH_HOST"
+          }
+
+          socket_ssh_pids() {
+            python3 - "$control_socket" <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          control_socket = sys.argv[1]
+          try:
+              proc_entries = list(pathlib.Path("/proc").glob("[0-9]*"))
+          except OSError:
+              raise SystemExit(2)
+
+          matches = []
+          for entry in proc_entries:
+              try:
+                  executable = os.path.basename(os.readlink(entry / "exe"))
+                  arguments = (entry / "cmdline").read_bytes().split(b"\0")
+                  arguments = [value.decode("utf-8", "surrogateescape") for value in arguments if value]
+              except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+                  continue
+              if executable != "ssh":
+                  continue
+              socket_match = any(
+                  value == "-S" and index + 1 < len(arguments)
+                  and arguments[index + 1] == control_socket
+                  for index, value in enumerate(arguments)
+              ) or any(value == f"-S{control_socket}" for value in arguments)
+              if socket_match:
+                  matches.append(int(entry.name))
+          for pid in sorted(matches):
+              print(pid)
+          PY
+          }
+
+          pid_is_expected_ssh() {
+            local candidate_pid=$1
+            python3 - "$candidate_pid" "$control_socket" <<'PY'
+          import os
+          import sys
+
+          pid, control_socket = sys.argv[1:]
+          proc = f"/proc/{pid}"
+          try:
+              executable = os.path.basename(os.readlink(f"{proc}/exe"))
+              arguments = open(f"{proc}/cmdline", "rb").read().split(b"\0")
+              arguments = [value.decode("utf-8", "surrogateescape") for value in arguments if value]
+          except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+              raise SystemExit(1)
+          socket_match = any(
+              value == "-S" and index + 1 < len(arguments)
+              and arguments[index + 1] == control_socket
+              for index, value in enumerate(arguments)
+          ) or any(value == f"-S{control_socket}" for value in arguments)
+          if executable != "ssh" or not socket_match:
+              raise SystemExit(1)
+          PY
+          }
 
           if ! command -v ss >/dev/null 2>&1; then
             fail_ssh_cleanup
           fi
+
+          master_pid=
+          pid_file_valid=false
+          invalid_pid_state=false
+          if [[ -e "$master_pid_file" || -L "$master_pid_file" ]]; then
+            if [[ -f "$master_pid_file" && ! -L "$master_pid_file" ]]; then
+              master_pid_text=$(<"$master_pid_file")
+              if (( ${#master_pid_text} <= 10 )) && \
+                [[ "$master_pid_text" =~ ^[0-9]+$ ]]; then
+                master_pid=$((10#$master_pid_text))
+                if (( master_pid > 1 )); then
+                  pid_file_valid=true
+                fi
+              fi
+              unset master_pid_text
+            fi
+            if [[ "$pid_file_valid" != "true" ]]; then
+              invalid_pid_state=true
+              master_pid=
+            fi
+          fi
+
+          if ! initial_listeners=$(ss -H -ltn 'sport = :19300' 2>/dev/null); then
+            fail_ssh_cleanup
+          fi
+          if ! initial_socket_pids=$(socket_ssh_pids 2>/dev/null); then
+            fail_ssh_cleanup
+          fi
+          missing_pid_evidence=false
+          if [[ "$pid_file_valid" != "true" && \
+                ( -S "$control_socket" || -n "$initial_listeners" || \
+                  -n "$initial_socket_pids" ) ]]; then
+            missing_pid_evidence=true
+          fi
+          unset initial_listeners initial_socket_pids
+
+          if [[ -S "$control_socket" && "$control_endpoint_valid" == "true" ]]; then
+            control_command exit >/dev/null 2>&1 || true
+          fi
+
           tunnel_stopped=false
-          for attempt in 1 2 3 4 5; do
+          for _ in 1 2 3 4 5; do
             master_active=false
-            if [[ -S "$control_socket" && -n "${CONAN_SSH_HOST:-}" && \
-                  -n "${CONAN_SSH_USER:-}" && -n "${CONAN_SSH_PORT:-}" ]] && \
-              ssh -S "$control_socket" -O check \
-                -p "$CONAN_SSH_PORT" \
-                -l "$CONAN_SSH_USER" \
-                "$CONAN_SSH_HOST" >/dev/null 2>&1; then
+            if [[ -S "$control_socket" && "$control_endpoint_valid" == "true" ]] && \
+              control_command check >/dev/null 2>&1; then
               master_active=true
             fi
             if ! listeners=$(ss -H -ltn 'sport = :19300' 2>/dev/null); then
               fail_ssh_cleanup
             fi
-            if [[ "$master_active" == "false" && -z "$listeners" ]]; then
+            pid_alive=false
+            if [[ "$pid_file_valid" == "true" ]] && kill -0 "$master_pid" 2>/dev/null; then
+              pid_alive=true
+            fi
+            if [[ "$master_active" == "false" && -z "$listeners" && \
+                  "$pid_alive" == "false" ]]; then
               tunnel_stopped=true
               break
             fi
             sleep 1
           done
           unset listeners
+
+          identity_failure=false
+          if [[ "$pid_file_valid" == "true" ]] && kill -0 "$master_pid" 2>/dev/null; then
+            if pid_is_expected_ssh "$master_pid" >/dev/null 2>&1; then
+              kill -TERM "$master_pid" >/dev/null 2>&1 || true
+              for _ in 1 2 3 4 5; do
+                if ! kill -0 "$master_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 1
+              done
+              if kill -0 "$master_pid" 2>/dev/null; then
+                if pid_is_expected_ssh "$master_pid" >/dev/null 2>&1; then
+                  kill -KILL "$master_pid" >/dev/null 2>&1 || true
+                  for _ in 1 2 3 4 5; do
+                    if ! kill -0 "$master_pid" 2>/dev/null; then
+                      break
+                    fi
+                    sleep 1
+                  done
+                else
+                  identity_failure=true
+                fi
+              fi
+            else
+              identity_failure=true
+            fi
+          fi
+
+          master_active=false
+          if [[ -S "$control_socket" && "$control_endpoint_valid" == "true" ]] && \
+            control_command check >/dev/null 2>&1; then
+            master_active=true
+          fi
+          if ! listeners=$(ss -H -ltn 'sport = :19300' 2>/dev/null); then
+            fail_ssh_cleanup
+          fi
+          if ! remaining_socket_pids=$(socket_ssh_pids 2>/dev/null); then
+            fail_ssh_cleanup
+          fi
+          pid_alive=false
+          if [[ "$pid_file_valid" == "true" ]] && kill -0 "$master_pid" 2>/dev/null; then
+            pid_alive=true
+          fi
+          if [[ "$master_active" == "false" && -z "$listeners" && \
+                -z "$remaining_socket_pids" && "$pid_alive" == "false" ]]; then
+            tunnel_stopped=true
+          else
+            tunnel_stopped=false
+          fi
+          unset listeners remaining_socket_pids
           if [[ "$tunnel_stopped" != "true" ]]; then
             fail_ssh_cleanup
           fi
@@ -432,12 +641,19 @@ jobs:
           if command -v shred >/dev/null 2>&1; then
             shred -u "$key_file" "$known_hosts_file" >/dev/null 2>&1 || true
           fi
-          rm -f "$key_file" "$known_hosts_file" "$control_socket" >/dev/null 2>&1 || true
+          rm -f "$key_file" "$known_hosts_file" "$control_socket" \
+            "$master_pid_file" >/dev/null 2>&1 || true
           rmdir "$state_dir" >/dev/null 2>&1 || true
           if [[ -e "$key_file" || -L "$key_file" || \
                 -e "$known_hosts_file" || -L "$known_hosts_file" || \
                 -e "$control_socket" || -L "$control_socket" || \
+                -e "$master_pid_file" || -L "$master_pid_file" || \
                 -e "$state_dir" || -L "$state_dir" ]]; then
+            fail_ssh_cleanup
+          fi
+          if [[ "$missing_pid_evidence" == "true" || \
+                "$invalid_pid_state" == "true" || \
+                "$identity_failure" == "true" ]]; then
             fail_ssh_cleanup
           fi
           echo "safe=true" >> "$GITHUB_OUTPUT"
