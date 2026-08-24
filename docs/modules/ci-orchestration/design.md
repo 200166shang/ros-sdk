@@ -104,79 +104,9 @@ profiles, settings, lockfile, and cache paths only; credentials are never comman
 The stable conclusion is intended for logs, job summaries, metrics, and tests. Raw dependency output
 must not be uploaded as a success artifact or copied into a shared cache.
 
-## Conan download-cache identity
-
-`scripts/ci/cache_canary.py` owns the compatibility identity used by local development and GitHub
-Actions. Both environments run the same command inside their active `ros2` image:
-
-```bash
-python3 -m scripts.ci cache-identity --generation v1
-```
-
-The environment fingerprint canonicalizes the effective ARM64 environment: Ubuntu and ROS
-identity, GCC target/version, glibc, Conan version, effective host and build profile output,
-Release/C++17/ARM64 Gate settings, declared Conan options, and the shared Docker base inputs. The
-Docker input digest stops at the `FROM base AS ci` boundary and includes the shared entrypoint, so
-changes to the later simulator-only `dev` stage do not change compatibility identity.
-
-The locked dependency hash is separate and covers both `conan.lock` and `conanfile.txt`. The
-resulting cache contract is:
-
-```text
-rosbridge-conan-download-<generation>-<architecture>-<environment-fingerprint>-<locked-hash>
-```
-
-Actions first requests the exact key. Its only restore prefix removes `<locked-hash>`, so prior
-packages may be reused only under the same generation, architecture, and normalized environment.
-Changing generation also changes the prefix and therefore forces a Cold/Recovery path.
-
-## Trusted producer and read-only canary
-
-`.github/workflows/conan-cache-producer.yml` is the only workflow introduced by the cache boundary
-that has `actions: write` and a cache save step. `ARM64 CI Image` first classifies the complete push.
-Actual image inputs run build/validation/publication and publish a tag scoped by both workflow run
-and attempt before the moving `ci-arm64-main` tag; cache production then pulls that exact tag.
-Cache-only inputs skip the image job and invoke the same producer with the already-published moving
-image. The producer is a reusable workflow called only by this trusted, serialized `main` workflow,
-so mixed changes have one ordered image-then-cache path and pure cache changes do not manufacture an
-image. Trusted recovery is initiated after changing the configured cache generation. The producer
-restores
-exact/compatible payload first, and saves an immutable exact key only after the Server Gate, graph
-validation, project build, credential scan, and size policy succeed.
-
-`.github/workflows/conan-cache-canary.yml` is a dispatch-only, `actions: read` consumer. It has no
-cache save step. The selected `cold`, `warm`, or `recovery` role must match the observed restoration:
-Cold and Recovery require a miss; Warm requires an exact key. Recovery first performs a lookup-only
-exact-key check for a populated previous generation, records that control, and then requires the
-distinct active generation to miss. Both workflows continue through
-the restricted SSH tunnel and the required Conan remote even on an exact hit, so cached payload
-never becomes package authority.
-
-`scripts/ci/conan_cache_tunnel.sh` keeps SSH keys and known-host material in a mode-0600 temporary
-directory, exposes only a loopback endpoint, passes Conan credentials only to an ephemeral container,
-and places `CONAN_HOME` on tmpfs. Only `.cache/conan-download` survives for Actions Cache; graph JSON,
-Conan client configuration, raw output, and credentials are excluded.
-
-## Canary evidence and capacity policy
-
-Each successful producer/canary run uploads one seven-day JSON result containing cache identity and
-restore kind, required-Server success, complete exact graph identities and digest/package count, an
-empty source-build list, restore/Conan/build timing, end-to-end verification timing, and before/after
-cache bytes, files, and payload digest. Exact-key runs mount Conan's package payload directory
-read-only while leaving its lock directory writable. A missing payload therefore fails closed before
-a complete response can be written, and the evidence records zero package-payload downloads plus the
-read-only enforcement mechanism.
-
-Before publication, the cache scanner rejects symlinks, Conan/SSH credential configuration, and any
-known credential bytes. An entry above 1 GiB emits a warning; an entry above 2 GiB is not saved.
-Repository Actions cache usage at or above 80% of the free 10-GiB allowance emits a warning; for a
-pending immutable save the projection includes the new entry. These capacity observations do not
-weaken strict Server or zero-source-build correctness.
-
 ## Migration boundary
 
 The existing production commands keep their current behavior until a later migration ticket changes
 workflow wiring. In particular, `detect-changes`, `prepare-image`, and `build-workspace` are not
 delegated to this module by Issue #82. This lets canary workflows exercise the shared plan and Gate
-before required PR checks adopt them. Issue #83 adds the producer and read-only canary but still does
-not modify `.github/workflows/pr-checks.yml` or make the canary a required check.
+before required PR checks adopt them.

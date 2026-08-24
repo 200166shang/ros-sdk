@@ -325,7 +325,6 @@ class GateRequest:
     build_profile: str = "default"
     output_folder: str = "build"
     download_cache: str | None = None
-    graph_output: str | None = None
     attempt_timeout_seconds: int = 420
 
 
@@ -401,9 +400,7 @@ def build_strict_conan_command(request: GateRequest) -> list[str]:
         "--settings:host=arch=armv8",
         "--settings:build=arch=armv8",
         "--settings:host=build_type=Release",
-        "--settings:build=build_type=Release",
         "--settings:host=compiler.cppstd=17",
-        "--settings:build=compiler.cppstd=17",
     ]
     if request.download_cache:
         if not Path(request.download_cache).is_absolute():
@@ -411,10 +408,6 @@ def build_strict_conan_command(request: GateRequest) -> list[str]:
         command.extend(
             ["-cc", f"core.download:download_cache={request.download_cache}"]
         )
-    if request.graph_output:
-        if not Path(request.graph_output).is_absolute():
-            raise ValueError("Conan graph output path must be absolute")
-        command.extend(["--format=json", f"--out-file={request.graph_output}"])
     return command
 
 
