@@ -76,7 +76,7 @@ jobs:
           set -u
 
           fail_tunnel_setup() {
-            echo "SSH tunnel setup failed" >&2
+            echo "ARM64 dependency preparation required: SSH tunnel setup failed" >&2
             exit 1
           }
 
@@ -133,6 +133,32 @@ jobs:
           if (( port != 22 )); then
             known_host_token="[$host]:$port"
           fi
+          known_host_records=0
+          while IFS= read -r known_host_line || [[ -n "$known_host_line" ]]; do
+            if [[ "$known_host_line" =~ ^[[:space:]]*$ || \
+                  "$known_host_line" =~ ^[[:space:]]*# ]]; then
+              continue
+            fi
+            record_host=
+            key_type=
+            key_blob=
+            extra_field=
+            read -r record_host key_type key_blob extra_field <<< "$known_host_line"
+            if [[ "$record_host" != "$known_host_token" || -n "$extra_field" ]]; then
+              fail_tunnel_setup
+            fi
+            if [[ ! "$key_type" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521))$ ]]; then
+              fail_tunnel_setup
+            fi
+            if (( ${#key_blob} < 16 || ${#key_blob} > 8192 )) || \
+              [[ ! "$key_blob" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]; then
+              fail_tunnel_setup
+            fi
+            known_host_records=$((known_host_records + 1))
+          done < "$known_hosts_file"
+          if (( known_host_records == 0 )); then
+            fail_tunnel_setup
+          fi
           if ! ssh-keygen -F "$known_host_token" -f "$known_hosts_file" \
             >/dev/null 2>&1; then
             fail_tunnel_setup
@@ -161,11 +187,7 @@ jobs:
           fi
           echo "SSH tunnel established"
 
-      - name: Start only the ROS 2 service
-        env:
-          CONAN_REMOTE_URL: http://host.docker.internal:19300
-          CONAN_LOGIN_USERNAME: ${{ secrets.CONAN_LOGIN_USERNAME }}
-          CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
+      - name: Start credentialless ROS 2 service
         run: python3 -m scripts.ci compose-up
 
       - name: Verify ARM64 build environment
@@ -226,6 +248,10 @@ jobs:
           trap - EXIT
           echo "value=$fingerprint" >> "$GITHUB_OUTPUT"
 
+      - name: Stop credentialless ROS 2 service
+        if: always()
+        run: python3 -m scripts.ci compose-down
+
       - name: Record cache restore start
         run: date +%s%3N > .cache/conan-spike/restore-start-ms
 
@@ -250,6 +276,13 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"seconds={seconds:.3f}\n")
           PY
+
+      - name: Start credential-bearing ROS 2 service
+        env:
+          CONAN_REMOTE_URL: http://host.docker.internal:19300
+          CONAN_LOGIN_USERNAME: ci-reader
+          CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
+        run: python3 -m scripts.ci compose-up
 
       - name: Verify required Conan remote
         env:
@@ -300,6 +333,54 @@ jobs:
             --build-log .cache/conan-spike/build.log \
             --build-total-seconds '${{ steps.build-timing.outputs.seconds }}' \
             --output .cache/conan-spike/collected.json
+
+      - name: Stop credential-bearing ROS 2 service
+        id: credential-container-cleanup
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          python3 -m scripts.ci compose-down
+          cleanup_status=$?
+          set -e
+
+          if docker inspect ros2 >/dev/null 2>&1; then
+            docker rm --force ros2 >/dev/null 2>&1 || true
+          fi
+          if docker inspect ros2 >/dev/null 2>&1; then
+            echo "Credential container cleanup failed" >&2
+            exit 1
+          fi
+          echo "safe=true" >> "$GITHUB_OUTPUT"
+          exit "$cleanup_status"
+
+      - name: Close encrypted Conan tunnel
+        if: always()
+        env:
+          CONAN_SSH_HOST: ${{ secrets.CONAN_SSH_HOST }}
+          CONAN_SSH_USER: ${{ secrets.CONAN_SSH_USER }}
+          CONAN_SSH_PORT: ${{ secrets.CONAN_SSH_PORT || '22' }}
+        shell: bash
+        run: |
+          set +e
+          state_dir="$RUNNER_TEMP/conan-ssh-tunnel"
+          key_file="$state_dir/id_ci"
+          known_hosts_file="$state_dir/known_hosts"
+          control_socket="$state_dir/control"
+
+          if [[ -S "$control_socket" && -n "${CONAN_SSH_HOST:-}" && \
+                -n "${CONAN_SSH_USER:-}" && -n "${CONAN_SSH_PORT:-}" ]]; then
+            ssh -S "$control_socket" -O exit \
+              -p "$CONAN_SSH_PORT" \
+              -l "$CONAN_SSH_USER" \
+              "$CONAN_SSH_HOST" >/dev/null 2>&1 || true
+          fi
+          if command -v shred >/dev/null 2>&1; then
+            shred -u "$key_file" "$known_hosts_file" >/dev/null 2>&1 || true
+          fi
+          rm -f "$key_file" "$known_hosts_file" "$control_socket" >/dev/null 2>&1 || true
+          rmdir "$state_dir" >/dev/null 2>&1 || true
+          exit 0
 
       - name: Record cache save start
         if: success() && steps.conan-cache.outputs.cache-hit != 'true'
@@ -368,7 +449,7 @@ jobs:
           retention-days: 7
 
       - name: Upload diagnostics after failure
-        if: failure()
+        if: failure() && steps.credential-container-cleanup.outputs.safe == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: conan-cache-spike-failure-${{ github.run_id }}-${{ github.run_attempt }}
@@ -378,35 +459,3 @@ jobs:
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
-
-      - name: Stop the ROS 2 service
-        if: always()
-        run: python3 -m scripts.ci compose-down
-
-      - name: Close encrypted Conan tunnel
-        if: always()
-        env:
-          CONAN_SSH_HOST: ${{ secrets.CONAN_SSH_HOST }}
-          CONAN_SSH_USER: ${{ secrets.CONAN_SSH_USER }}
-          CONAN_SSH_PORT: ${{ secrets.CONAN_SSH_PORT || '22' }}
-        shell: bash
-        run: |
-          set +e
-          state_dir="$RUNNER_TEMP/conan-ssh-tunnel"
-          key_file="$state_dir/id_ci"
-          known_hosts_file="$state_dir/known_hosts"
-          control_socket="$state_dir/control"
-
-          if [[ -S "$control_socket" && -n "${CONAN_SSH_HOST:-}" && \
-                -n "${CONAN_SSH_USER:-}" && -n "${CONAN_SSH_PORT:-}" ]]; then
-            ssh -S "$control_socket" -O exit \
-              -p "$CONAN_SSH_PORT" \
-              -l "$CONAN_SSH_USER" \
-              "$CONAN_SSH_HOST" >/dev/null 2>&1 || true
-          fi
-          if command -v shred >/dev/null 2>&1; then
-            shred -u "$key_file" "$known_hosts_file" >/dev/null 2>&1 || true
-          fi
-          rm -f "$key_file" "$known_hosts_file" "$control_socket" >/dev/null 2>&1 || true
-          rmdir "$state_dir" >/dev/null 2>&1 || true
-          exit 0
