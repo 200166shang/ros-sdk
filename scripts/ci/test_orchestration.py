@@ -146,6 +146,7 @@ class StrictConanCommandTests(unittest.TestCase):
                 remote_name="rosbridge",
                 cache_state=CacheState.MISS,
                 download_cache="/workspace/.cache/conan-download",
+                graph_output="/workspace/.cache/conan-canary/graph.json",
             )
         )
 
@@ -153,10 +154,19 @@ class StrictConanCommandTests(unittest.TestCase):
         self.assertIn("--lockfile=conan.lock", command)
         self.assertIn("--settings:host=arch=armv8", command)
         self.assertIn("--settings:build=arch=armv8", command)
+        self.assertIn("--settings:host=build_type=Release", command)
+        self.assertIn("--settings:build=build_type=Release", command)
+        self.assertIn("--settings:host=compiler.cppstd=17", command)
+        self.assertIn("--settings:build=compiler.cppstd=17", command)
         self.assertIn("--build=never", command)
         self.assertNotIn("--build=missing", command)
         self.assertIn(
             "core.download:download_cache=/workspace/.cache/conan-download",
+            command,
+        )
+        self.assertIn("--format=json", command)
+        self.assertIn(
+            "--out-file=/workspace/.cache/conan-canary/graph.json",
             command,
         )
 
@@ -166,6 +176,16 @@ class StrictConanCommandTests(unittest.TestCase):
                 GateRequest(
                     remote_name="https://user:password@example.invalid",
                     cache_state=CacheState.MISS,
+                )
+            )
+
+    def test_command_rejects_relative_graph_output(self) -> None:
+        with self.assertRaisesRegex(ValueError, "graph"):
+            build_strict_conan_command(
+                GateRequest(
+                    remote_name="rosbridge",
+                    cache_state=CacheState.MISS,
+                    graph_output=".cache/graph.json",
                 )
             )
 

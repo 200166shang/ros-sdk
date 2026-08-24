@@ -1,0 +1,179 @@
+name: Trusted Conan Cache Producer
+
+on:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        required: true
+        type: string
+      ci_image:
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+  packages: read
+
+concurrency:
+  group: trusted-conan-cache-producer
+  cancel-in-progress: false
+
+jobs:
+  produce:
+    name: Verify and refresh trusted ARM64 cache
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    env:
+      CACHE_GENERATION: ${{ vars.CONAN_CACHE_GENERATION || 'v1' }}
+      CI_IMAGE: ${{ inputs.ci_image }}
+    steps:
+      - name: Record end-to-end canary start
+        id: total-start
+        run: echo "unix_ms=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out trusted main code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the ARM64 toolchain image
+        run: docker pull "$CI_IMAGE"
+
+      - name: Compute normalized compatibility identity
+        id: identity
+        shell: bash
+        run: |
+          identity=$(docker run --rm \
+            --volume "$PWD:/workspace:ro" --workdir /workspace "$CI_IMAGE" \
+            python3 -m scripts.ci cache-identity --generation "$CACHE_GENERATION")
+          python3 - "$identity" <<'PY'
+          import json
+          import os
+          import sys
+
+          identity = json.loads(sys.argv[1])
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"key={identity['key']}\n")
+              output.write(f"restore_prefix={identity['restore_prefix']}\n")
+          PY
+
+      - name: Prepare cache directories
+        run: mkdir -p .cache/conan-download .cache/conan-canary
+
+      - name: Record cache restore start
+        run: date +%s%3N > .cache/conan-canary/restore-start-ms
+
+      - name: Restore exact or compatible Conan download cache
+        id: cache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/conan-download
+          key: ${{ steps.identity.outputs.key }}
+          restore-keys: ${{ steps.identity.outputs.restore_prefix }}
+
+      - name: Measure and classify cache restoration
+        id: restore
+        env:
+          MATCHED_KEY: ${{ steps.cache-restore.outputs.cache-matched-key }}
+          RESTORE_FAILED: ${{ steps.cache-restore.outcome == 'failure' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import time
+          from pathlib import Path
+
+          started = int(Path(".cache/conan-canary/restore-start-ms").read_text())
+          seconds = (time.time_ns() // 1_000_000 - started) / 1000
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"seconds={seconds:.3f}\n")
+              output.write(f"matched_key={os.environ.get('MATCHED_KEY', '')}\n")
+              output.write(f"failed={os.environ['RESTORE_FAILED'].lower()}\n")
+          PY
+
+      - name: Read repository cache usage
+        id: repository-cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bytes=$(gh api "repos/$GITHUB_REPOSITORY/actions/cache/usage" \
+            --jq '.active_caches_size_in_bytes')
+          echo "bytes=$bytes" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Server, graph, build, and cache payload
+        env:
+          SAMPLE_ROLE: producer
+          EXPECTED_CACHE_KEY: ${{ steps.identity.outputs.key }}
+          MATCHED_CACHE_KEY: ${{ steps.restore.outputs.matched_key }}
+          CACHE_RESTORE_FAILED: ${{ steps.restore.outputs.failed }}
+          CACHE_RESTORE_SECONDS: ${{ steps.restore.outputs.seconds }}
+          REPOSITORY_CACHE_BYTES: ${{ steps.repository-cache.outputs.bytes }}
+          CANARY_START_UNIX_MS: ${{ steps.total-start.outputs.unix_ms }}
+          CONAN_SSH_PRIVATE_KEY: ${{ secrets.CONAN_SSH_PRIVATE_KEY }}
+          CONAN_SSH_KNOWN_HOSTS: ${{ secrets.CONAN_SSH_KNOWN_HOSTS }}
+          CONAN_SSH_HOST: ${{ secrets.CONAN_SSH_HOST }}
+          CONAN_SSH_PORT: ${{ secrets.CONAN_SSH_PORT }}
+          CONAN_SSH_USER: ${{ secrets.CONAN_SSH_USER }}
+          CONAN_SSH_TARGET_HOST: ${{ secrets.CONAN_SSH_TARGET_HOST }}
+          CONAN_SSH_TARGET_PORT: ${{ secrets.CONAN_SSH_TARGET_PORT }}
+          CONAN_LOGIN_USERNAME: ${{ secrets.CONAN_LOGIN_USERNAME }}
+          CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
+        run: scripts/ci/conan_cache_tunnel.sh
+
+      - name: Publish evidence and save policy
+        id: evidence
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(Path(".cache/conan-canary/result.json").read_text())
+          timings = result["timings_seconds"]
+          capacity = result["capacity"]
+          summary = [
+              "## Trusted Conan cache producer",
+              "",
+              f"- Identity: `{result['cache_identity']['key']}`",
+              f"- Restore: `{result['restore_kind']}`",
+              f"- Graph: `{result['graph_digest']}` ({result['package_count']} packages)",
+              f"- Source builds: `{len(result['source_builds'])}`",
+              f"- Restore / Conan / build / total: {timings['restore']}s / "
+              f"{timings['conan']}s / {timings['build']}s / {timings['total']}s",
+              f"- Cache: {result['cache_after']['bytes']} bytes, "
+              f"{result['cache_after']['files']} files",
+              f"- Warm payload downloads: `{result['payload_downloads']}`",
+          ]
+          summary.extend(f"- Warning: {warning}" for warning in capacity["warnings"])
+          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(summary) + "\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"save_allowed={str(capacity['save_allowed']).lower()}\n")
+              output.write(f"restore_kind={result['restore_kind']}\n")
+          PY
+
+      - name: Save verified Conan download cache
+        if: >-
+          success() &&
+          steps.evidence.outputs.save_allowed == 'true' &&
+          steps.evidence.outputs.restore_kind != 'exact'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/conan-download
+          key: ${{ steps.identity.outputs.key }}
+
+      - name: Upload credential-free producer evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: conan-cache-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/conan-canary/result.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7

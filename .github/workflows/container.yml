@@ -6,7 +6,11 @@ on:
     paths:
       - docker/**
       - docker-compose.yaml
+      - conan.lock
       - conanfile.txt
+      - scripts/ci/cache_canary.py
+      - scripts/ci/conan_cache_tunnel.sh
+      - scripts/ci/orchestration.py
       - src/ros2_sdk/package.xml
       - src/ros2_sdk/CMakeLists.txt
   schedule:
@@ -23,11 +27,49 @@ concurrency:
 
 env:
   CI_IMAGE: ghcr.io/200166shang/ros-sdk:ci-arm64-main
+  CI_IMAGE_IMMUTABLE: ghcr.io/200166shang/ros-sdk:ci-arm64-run-${{ github.run_id }}-${{ github.run_attempt }}
   CANDIDATE_IMAGE: rosbridge:ci-arm64-candidate
 
 jobs:
+  classify:
+    name: Classify image and cache inputs
+    runs-on: ubuntu-latest
+    outputs:
+      image_changed: ${{ steps.classify.outputs.image_changed }}
+    steps:
+      - name: Check out main input history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify the triggering inputs
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          image_changed=true
+          if [[ "$EVENT_NAME" == push ]]; then
+            plan_arguments=()
+            while IFS= read -r path; do
+              plan_arguments+=(--changed-file "$path")
+            done < <(git diff --name-only "$PUSH_BEFORE" "$PUSH_SHA")
+            plan=$(python3 -m scripts.ci plan \
+              --event main-push \
+              --cache-state hit \
+              "${plan_arguments[@]}")
+            image_changed=$(python3 -c \
+              'import json, sys; print(str(json.load(sys.stdin)["publish_image"]).lower())' \
+              <<< "$plan")
+          fi
+          echo "image_changed=$image_changed" >> "$GITHUB_OUTPUT"
+
   build-validate-publish:
     name: Build, validate, and publish ARM64 CI image
+    needs: classify
+    if: needs.classify.outputs.image_changed == 'true'
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Check out main
@@ -82,3 +124,27 @@ jobs:
 
       - name: Publish the validated ci-arm64-main image
         run: python3 -m scripts.ci publish-image
+
+  refresh-conan-cache:
+    name: Refresh trusted Conan download cache
+    needs:
+      - classify
+      - build-validate-publish
+    if: >-
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      needs.classify.result == 'success' &&
+      (needs.build-validate-publish.result == 'success' ||
+       needs.build-validate-publish.result == 'skipped')
+    permissions:
+      actions: write
+      contents: read
+      packages: read
+    uses: ./.github/workflows/conan-cache-producer.yml
+    with:
+      checkout_ref: ${{ github.sha }}
+      ci_image: >-
+        ${{ needs.classify.outputs.image_changed == 'true' &&
+        format('ghcr.io/200166shang/ros-sdk:ci-arm64-run-{0}-{1}', github.run_id,
+        github.run_attempt) || 'ghcr.io/200166shang/ros-sdk:ci-arm64-main' }}
+    secrets: inherit
