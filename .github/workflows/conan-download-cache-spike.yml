@@ -431,11 +431,34 @@ jobs:
             exit 1
           }
 
+          scrub_ssh_paths() {
+            local scrub_path
+            for scrub_path in "$key_file" "$known_hosts_file" \
+              "$control_socket" "$master_pid_file"; do
+              if [[ -f "$scrub_path" && ! -L "$scrub_path" ]] && \
+                command -v shred >/dev/null 2>&1; then
+                shred -u "$scrub_path" >/dev/null 2>&1 || true
+              fi
+              rm -f "$scrub_path" >/dev/null 2>&1 || true
+            done
+            rmdir "$state_dir" >/dev/null 2>&1 || true
+            return 0
+          }
+
+          scrub_ssh_state_on_exit() {
+            local original_status=$?
+            trap - EXIT
+            set +e
+            scrub_ssh_paths
+            exit "$original_status"
+          }
+
           state_dir="$RUNNER_TEMP/conan-ssh-tunnel"
           key_file="$state_dir/id_ci"
           known_hosts_file="$state_dir/known_hosts"
           control_socket="$state_dir/control"
           master_pid_file="$state_dir/master.pid"
+          trap scrub_ssh_state_on_exit EXIT
 
           control_endpoint_valid=false
           if [[ "${CONAN_SSH_HOST:-}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ && \
@@ -638,12 +661,7 @@ jobs:
             fail_ssh_cleanup
           fi
 
-          if command -v shred >/dev/null 2>&1; then
-            shred -u "$key_file" "$known_hosts_file" >/dev/null 2>&1 || true
-          fi
-          rm -f "$key_file" "$known_hosts_file" "$control_socket" \
-            "$master_pid_file" >/dev/null 2>&1 || true
-          rmdir "$state_dir" >/dev/null 2>&1 || true
+          scrub_ssh_paths
           if [[ -e "$key_file" || -L "$key_file" || \
                 -e "$known_hosts_file" || -L "$known_hosts_file" || \
                 -e "$control_socket" || -L "$control_socket" || \
@@ -656,6 +674,33 @@ jobs:
                 "$identity_failure" == "true" ]]; then
             fail_ssh_cleanup
           fi
+
+          final_master_active=false
+          if [[ -S "$control_socket" && "$control_endpoint_valid" == "true" ]] && \
+            control_command check >/dev/null 2>&1; then
+            final_master_active=true
+          fi
+          if ! final_listeners=$(ss -H -ltn 'sport = :19300' 2>/dev/null); then
+            fail_ssh_cleanup
+          fi
+          if ! final_socket_pids=$(socket_ssh_pids 2>/dev/null); then
+            fail_ssh_cleanup
+          fi
+          final_pid_alive=false
+          if [[ "$pid_file_valid" == "true" ]] && kill -0 "$master_pid" 2>/dev/null; then
+            final_pid_alive=true
+          fi
+          if [[ "$final_master_active" != "false" || -n "$final_listeners" || \
+                -n "$final_socket_pids" || "$final_pid_alive" != "false" || \
+                -e "$key_file" || -L "$key_file" || \
+                -e "$known_hosts_file" || -L "$known_hosts_file" || \
+                -e "$control_socket" || -L "$control_socket" || \
+                -e "$master_pid_file" || -L "$master_pid_file" || \
+                -e "$state_dir" || -L "$state_dir" ]]; then
+            fail_ssh_cleanup
+          fi
+          unset final_listeners final_socket_pids
+          trap - EXIT
           echo "safe=true" >> "$GITHUB_OUTPUT"
           exit 0
 
