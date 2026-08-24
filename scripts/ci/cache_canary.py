@@ -179,6 +179,10 @@ class CanaryRequest:
     remote_name: str
     restore_seconds: float
     repository_cache_bytes: int
+    cache_read_only: bool = False
+    recovery_from_generation: str = ""
+    recovery_control_key: str = ""
+    total_start_unix_ms: int = 0
     lockfile: Path = Path("conan.lock")
     host_profile: str = "default"
     build_profile: str = "default"
@@ -200,6 +204,10 @@ class CanaryEvidence:
     restore_seconds: float
     conan_seconds: float
     build_seconds: float
+    total_seconds: float
+    recovery_from_generation: str = ""
+    recovery_control_key: str = ""
+    warm_payload_enforcement: str = ""
     server_verified: bool = True
 
     @property
@@ -207,7 +215,6 @@ class CanaryEvidence:
         return self.cache_before != self.cache_after
 
     def to_dict(self) -> dict[str, object]:
-        total = self.restore_seconds + self.conan_seconds + self.build_seconds
         return {
             "schema_version": 1,
             "sample_role": self.sample_role.value,
@@ -223,12 +230,16 @@ class CanaryEvidence:
             "cache_before": self.cache_before.to_dict(),
             "cache_after": self.cache_after.to_dict(),
             "payload_changed": self.payload_changed,
+            "payload_downloads": 0 if self.warm_payload_enforcement else None,
+            "warm_payload_enforcement": self.warm_payload_enforcement,
+            "recovery_from_generation": self.recovery_from_generation,
+            "recovery_control_key": self.recovery_control_key,
             "capacity": self.capacity.to_dict(),
             "timings_seconds": {
                 "restore": round(self.restore_seconds, 3),
                 "conan": round(self.conan_seconds, 3),
                 "build": round(self.build_seconds, 3),
-                "total": round(total, 3),
+                "total": round(self.total_seconds, 3),
             },
         }
 
@@ -625,6 +636,7 @@ def evaluate_cache_capacity(
     repository_bytes: int,
     *,
     repository_limit_bytes: int = REPOSITORY_CACHE_LIMIT_BYTES,
+    pending_save: bool = False,
 ) -> CapacityDecision:
     """Apply the ticket's entry refusal and repository warning thresholds."""
     if min(entry_bytes, repository_bytes, repository_limit_bytes) < 0:
@@ -635,7 +647,8 @@ def evaluate_cache_capacity(
     warnings: list[str] = []
     if entry_bytes > GIB:
         warnings.append("single cache entry exceeds the 1 GiB warning threshold")
-    if repository_bytes * 5 >= repository_limit_bytes * 4:
+    projected_repository_bytes = repository_bytes + (entry_bytes if pending_save else 0)
+    if projected_repository_bytes * 5 >= repository_limit_bytes * 4:
         warnings.append("repository cache usage reached the 80% warning threshold")
     if entry_bytes > 2 * GIB:
         return CapacityDecision(
@@ -662,6 +675,8 @@ def read_graph_evidence(graph_file: Path) -> GraphEvidence:
             if not reference or reference == "conanfile":
                 continue
             package = {field: node.get(field) for field in _GRAPH_FIELDS}
+            if any(value is None or str(value).strip() == "" for value in package.values()):
+                raise TypeError
             packages.append(package)
             if str(node.get("binary", "")).strip().lower() == "build":
                 source_builds.append("detected")
@@ -709,6 +724,7 @@ def run_canary(
     gate_runner: Callable[[GateRequest, Iterable[str]], GateConclusion] | None = None,
     build_runner: Callable[[Sequence[str]], CommandResult] = _run_build,
     clock: Callable[[], float] = time.monotonic,
+    wall_clock_ms: Callable[[], int] = lambda: time.time_ns() // 1_000_000,
     secrets: Iterable[str] = (),
 ) -> CanaryEvidence:
     """Run the strict Gate and build, returning only credential-free evidence."""
@@ -716,6 +732,8 @@ def run_canary(
         raise ValueError("cache restore timing must be finite and nonnegative")
     if request.repository_cache_bytes < 0:
         raise ValueError("repository cache usage must be nonnegative")
+    if request.total_start_unix_ms < 0:
+        raise ValueError("total timing start must be nonnegative")
     if not request.cache_dir.is_absolute() or not request.graph_file.is_absolute():
         raise ValueError("canary cache and graph paths must be absolute")
     if not request.output_folder.is_absolute():
@@ -728,6 +746,21 @@ def run_canary(
     allowed = expected_restore_kinds.get(request.sample_role)
     if allowed is not None and request.restore.kind not in allowed:
         raise RuntimeError("cache sample role does not match the observed restore identity")
+    if request.restore.kind == RestoreKind.EXACT and not request.cache_read_only:
+        raise RuntimeError("Warm cache requires a read-only package payload mount")
+    recovery_from_generation = request.recovery_from_generation.strip()
+    if request.sample_role == SampleRole.RECOVERY and (
+        not recovery_from_generation or recovery_from_generation == request.identity.generation
+    ):
+        raise RuntimeError("Recovery requires a distinct previous cache generation")
+    if request.sample_role == SampleRole.RECOVERY:
+        expected_control_key = (
+            f"{CACHE_KEY_NAMESPACE}-{recovery_from_generation}-"
+            f"{request.identity.architecture}-{request.identity.environment_fingerprint}-"
+            f"{request.identity.locked_dependency_hash}"
+        )
+        if request.recovery_control_key.strip() != expected_control_key:
+            raise RuntimeError("Recovery requires an exact populated previous-generation control")
 
     secret_values = tuple(secrets)
     before = inspect_download_cache(request.cache_dir, secrets=secret_values)
@@ -781,7 +814,22 @@ def run_canary(
         raise RuntimeError("strict dependency preparation produced an empty download cache")
     if request.restore.kind == RestoreKind.EXACT and before != after:
         raise RuntimeError("Warm cache payload changed during an exact-key run")
-    capacity = evaluate_cache_capacity(after.bytes, request.repository_cache_bytes)
+    pending_save = (
+        request.sample_role == SampleRole.PRODUCER
+        and request.restore.kind != RestoreKind.EXACT
+    )
+    capacity = evaluate_cache_capacity(
+        after.bytes,
+        request.repository_cache_bytes,
+        pending_save=pending_save,
+    )
+    component_total = request.restore_seconds + conan_seconds + build_seconds
+    if request.total_start_unix_ms:
+        total_seconds = (wall_clock_ms() - request.total_start_unix_ms) / 1000
+        if total_seconds < 0:
+            raise RuntimeError("total canary timing is invalid")
+    else:
+        total_seconds = component_total
     return CanaryEvidence(
         sample_role=request.sample_role,
         identity=request.identity,
@@ -794,4 +842,12 @@ def run_canary(
         restore_seconds=request.restore_seconds,
         conan_seconds=conan_seconds,
         build_seconds=build_seconds,
+        total_seconds=total_seconds,
+        recovery_from_generation=recovery_from_generation,
+        recovery_control_key=request.recovery_control_key.strip(),
+        warm_payload_enforcement=(
+            "read-only-download-payload-mount"
+            if request.restore.kind == RestoreKind.EXACT and request.cache_read_only
+            else ""
+        ),
     )

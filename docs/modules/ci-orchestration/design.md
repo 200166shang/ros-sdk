@@ -133,16 +133,24 @@ Changing generation also changes the prefix and therefore forces a Cold/Recovery
 ## Trusted producer and read-only canary
 
 `.github/workflows/conan-cache-producer.yml` is the only workflow introduced by the cache boundary
-that has `actions: write` and a cache save step. It runs only from trusted `main` code (pushes that
-change identity inputs, or an explicit dispatch), restores exact/compatible payload first, and saves
-an immutable exact key only after the Server Gate, graph validation, project build, credential scan,
-and size policy succeed.
+that has `actions: write` and a cache save step. `ARM64 CI Image` first classifies the complete push.
+Actual image inputs run build/validation/publication and publish a tag scoped by both workflow run
+and attempt before the moving `ci-arm64-main` tag; cache production then pulls that exact tag.
+Cache-only inputs skip the image job and invoke the same producer with the already-published moving
+image. The producer is a reusable workflow called only by this trusted, serialized `main` workflow,
+so mixed changes have one ordered image-then-cache path and pure cache changes do not manufacture an
+image. Trusted recovery is initiated after changing the configured cache generation. The producer
+restores
+exact/compatible payload first, and saves an immutable exact key only after the Server Gate, graph
+validation, project build, credential scan, and size policy succeed.
 
 `.github/workflows/conan-cache-canary.yml` is a dispatch-only, `actions: read` consumer. It has no
 cache save step. The selected `cold`, `warm`, or `recovery` role must match the observed restoration:
-Cold and Recovery require a miss; Warm requires an exact key. A new generation is used for the
-Recovery control. Both workflows continue through the restricted SSH tunnel and the required Conan
-remote even on an exact hit, so cached payload never becomes package authority.
+Cold and Recovery require a miss; Warm requires an exact key. Recovery first performs a lookup-only
+exact-key check for a populated previous generation, records that control, and then requires the
+distinct active generation to miss. Both workflows continue through
+the restricted SSH tunnel and the required Conan remote even on an exact hit, so cached payload
+never becomes package authority.
 
 `scripts/ci/conan_cache_tunnel.sh` keeps SSH keys and known-host material in a mode-0600 temporary
 directory, exposes only a loopback endpoint, passes Conan credentials only to an ephemeral container,
@@ -152,15 +160,18 @@ Conan client configuration, raw output, and credentials are excluded.
 ## Canary evidence and capacity policy
 
 Each successful producer/canary run uploads one seven-day JSON result containing cache identity and
-restore kind, required-Server success, exact graph digest/package count, an empty source-build list,
-restore/Conan/build/total timing, and before/after cache bytes, files, and payload digest. Exact Warm
-runs fail if the download-cache payload changes, providing observable evidence that complete cached
-payload was not fetched again.
+restore kind, required-Server success, complete exact graph identities and digest/package count, an
+empty source-build list, restore/Conan/build timing, end-to-end verification timing, and before/after
+cache bytes, files, and payload digest. Exact-key runs mount Conan's package payload directory
+read-only while leaving its lock directory writable. A missing payload therefore fails closed before
+a complete response can be written, and the evidence records zero package-payload downloads plus the
+read-only enforcement mechanism.
 
 Before publication, the cache scanner rejects symlinks, Conan/SSH credential configuration, and any
 known credential bytes. An entry above 1 GiB emits a warning; an entry above 2 GiB is not saved.
-Repository Actions cache usage at or above 80% of the free 10-GiB allowance emits a warning. These
-capacity observations do not weaken strict Server or zero-source-build correctness.
+Repository Actions cache usage at or above 80% of the free 10-GiB allowance emits a warning; for a
+pending immutable save the projection includes the new entry. These capacity observations do not
+weaken strict Server or zero-source-build correctness.
 
 ## Migration boundary
 

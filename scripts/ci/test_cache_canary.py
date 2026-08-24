@@ -312,6 +312,53 @@ class EnvironmentEvidenceTests(unittest.TestCase):
         self.assertEqual(payload["architecture"], "arm64")
         self.assertTrue(payload["key"].startswith("rosbridge-conan-download-v7-arm64-"))
 
+    def test_extra_dependency_files_do_not_replace_mandatory_conanfile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._repository(root)
+            (root / "extra.txt").write_text("extra", encoding="utf-8")
+            evidence = {
+                "architecture": "arm64",
+                "os": {},
+                "ros": {},
+                "compiler": {},
+                "libc": {},
+                "conan": {},
+                "host_profile": {},
+                "build_profile": {},
+                "build_settings": {},
+                "options": {},
+                "shared_base": {},
+            }
+
+            def identity() -> str:
+                stdout = io.StringIO()
+                argv = [
+                    "scripts.ci",
+                    "cache-identity",
+                    "--generation",
+                    "v7",
+                    "--dependency-file",
+                    "extra.txt",
+                ]
+                with (
+                    mock.patch.object(sys, "argv", argv),
+                    mock.patch(
+                        "scripts.ci.__main__.cache_canary.collect_environment_evidence",
+                        return_value=evidence,
+                    ),
+                    mock.patch.object(os, "getcwd", return_value=str(root)),
+                    contextlib.redirect_stdout(stdout),
+                ):
+                    self.assertEqual(main(), 0)
+                return json.loads(stdout.getvalue())["locked_dependency_hash"]
+
+            baseline = identity()
+            (root / "conanfile.txt").write_text("changed", encoding="utf-8")
+            changed = identity()
+
+        self.assertNotEqual(baseline, changed)
+
     def test_required_remote_uses_loopback_tunnel_without_secret_arguments(self) -> None:
         commands = []
 
@@ -552,6 +599,15 @@ class CacheLifecycleTests(unittest.TestCase):
         self.assertFalse(refused.save_allowed)
         self.assertIn("2 GiB", refused.reason)
 
+    def test_capacity_policy_warns_when_pending_save_crosses_repository_threshold(self) -> None:
+        decision = evaluate_cache_capacity(
+            GIB,
+            7 * GIB + 1,
+            pending_save=True,
+        )
+
+        self.assertIn("80%", " ".join(decision.warnings))
+
 
 class GraphEvidenceTests(unittest.TestCase):
     def _write_graph(self, path: Path, package_id: str = "package-id", binary: str = "Cache"):
@@ -598,9 +654,20 @@ class GraphEvidenceTests(unittest.TestCase):
         self.assertIn("source build", str(raised.exception))
         self.assertNotIn("zlib", str(raised.exception))
 
+    def test_graph_evidence_rejects_incomplete_package_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            graph = Path(directory) / "graph.json"
+            self._write_graph(graph)
+            payload = json.loads(graph.read_text(encoding="utf-8"))
+            del payload["graph"]["nodes"]["1"]["prev"]
+            graph.write_text(json.dumps(payload), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "malformed"):
+                read_graph_evidence(graph)
+
 
 class CanaryRunTests(unittest.TestCase):
-    def _identity(self, root: Path):
+    def _identity(self, root: Path, generation: str = "v1"):
         lockfile = root / "conan.lock"
         manifest = root / "conanfile.txt"
         lockfile.write_text("lock", encoding="utf-8")
@@ -619,7 +686,7 @@ class CanaryRunTests(unittest.TestCase):
             "shared_base": {},
         }
         return build_cache_identity(
-            generation="v1",
+            generation=generation,
             evidence=evidence,
             lockfile=lockfile,
             dependency_files=[manifest],
@@ -684,10 +751,13 @@ class CanaryRunTests(unittest.TestCase):
                     remote_name="rosbridge",
                     restore_seconds=2.5,
                     repository_cache_bytes=1000,
+                    cache_read_only=True,
+                    total_start_unix_ms=1000,
                 ),
                 gate_runner=gate_runner,
                 build_runner=lambda command: CommandResult(0),
                 clock=lambda: next(times),
+                wall_clock_ms=lambda: 13_500,
                 secrets=("credential-value",),
             )
 
@@ -699,7 +769,9 @@ class CanaryRunTests(unittest.TestCase):
         self.assertEqual(result["timings_seconds"]["restore"], 2.5)
         self.assertEqual(result["timings_seconds"]["conan"], 5.0)
         self.assertEqual(result["timings_seconds"]["build"], 3.0)
-        self.assertEqual(result["timings_seconds"]["total"], 10.5)
+        self.assertEqual(result["timings_seconds"]["total"], 12.5)
+        self.assertEqual(result["payload_downloads"], 0)
+        self.assertEqual(result["warm_payload_enforcement"], "read-only-download-payload-mount")
 
     def test_exact_warm_run_fails_if_cached_payload_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -729,6 +801,7 @@ class CanaryRunTests(unittest.TestCase):
                         remote_name="rosbridge",
                         restore_seconds=1.0,
                         repository_cache_bytes=0,
+                        cache_read_only=True,
                     ),
                     gate_runner=gate_runner,
                     build_runner=lambda command: CommandResult(0),
@@ -775,6 +848,102 @@ class CanaryRunTests(unittest.TestCase):
 
         self.assertTrue(evidence.payload_changed)
         self.assertTrue(evidence.capacity.save_allowed)
+
+    def test_warm_requires_read_only_download_payload_mount(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = self._identity(root)
+            cache = root / "cache"
+            cache.mkdir()
+            (cache / "archive.tgz").write_bytes(b"payload")
+            restore = classify_cache_restore(identity, matched_key=identity.key)
+
+            with self.assertRaisesRegex(RuntimeError, "read-only"):
+                run_canary(
+                    CanaryRequest(
+                        sample_role=SampleRole.WARM,
+                        identity=identity,
+                        restore=restore,
+                        cache_dir=cache,
+                        graph_file=root / "graph.json",
+                        output_folder=root / "build",
+                        remote_name="rosbridge",
+                        restore_seconds=1.0,
+                        repository_cache_bytes=0,
+                    )
+                )
+
+    def test_recovery_requires_a_distinct_previous_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = self._identity(root)
+            cache = root / "cache"
+            cache.mkdir()
+            restore = classify_cache_restore(identity, matched_key="")
+
+            for previous in ("", "v1"):
+                with self.subTest(previous=previous), self.assertRaisesRegex(
+                    RuntimeError,
+                    "generation",
+                ):
+                    run_canary(
+                        CanaryRequest(
+                            sample_role=SampleRole.RECOVERY,
+                            identity=identity,
+                            restore=restore,
+                            cache_dir=cache,
+                            graph_file=root / "graph.json",
+                            output_folder=root / "build",
+                            remote_name="rosbridge",
+                            restore_seconds=1.0,
+                            repository_cache_bytes=0,
+                            recovery_from_generation=previous,
+                        )
+                    )
+
+    def test_recovery_proves_populated_previous_generation_before_new_generation_miss(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = self._identity(root, "v1")
+            identity = self._identity(root, "v2")
+            cache = root / "cache"
+            cache.mkdir()
+            graph = root / "evidence" / "graph.json"
+            restore = classify_cache_restore(identity, matched_key="")
+
+            def gate_runner(request, secrets):
+                (cache / "archive.tgz").write_bytes(b"payload")
+                self._write_graph(graph)
+                return GateConclusion(
+                    success=True,
+                    dependency_path=DependencyPath.COLD,
+                    attempts=1,
+                    failure_class=FailureClass.NONE,
+                    diagnostic="Cold dependency path completed through the required Conan remote.",
+                    command=("conan", "install"),
+                )
+
+            evidence = run_canary(
+                CanaryRequest(
+                    sample_role=SampleRole.RECOVERY,
+                    identity=identity,
+                    restore=restore,
+                    cache_dir=cache,
+                    graph_file=graph,
+                    output_folder=root / "build",
+                    remote_name="rosbridge",
+                    restore_seconds=1.0,
+                    repository_cache_bytes=0,
+                    recovery_from_generation="v1",
+                    recovery_control_key=previous.key,
+                ),
+                gate_runner=gate_runner,
+                build_runner=lambda command: CommandResult(0),
+                clock=iter((0.0, 1.0, 1.0, 2.0)).__next__,
+            )
+
+        self.assertEqual(evidence.recovery_from_generation, "v1")
+        self.assertEqual(evidence.recovery_control_key, previous.key)
 
     def test_sample_role_must_match_observed_restore_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PRODUCER = ROOT / ".github" / "workflows" / "conan-cache-producer.yml"
 CANARY = ROOT / ".github" / "workflows" / "conan-cache-canary.yml"
+CONTAINER = ROOT / ".github" / "workflows" / "container.yml"
 PR_CHECKS = ROOT / ".github" / "workflows" / "pr-checks.yml"
 TUNNEL_RUNNER = ROOT / "scripts" / "ci" / "conan_cache_tunnel.sh"
 
@@ -20,19 +21,37 @@ class CacheWorkflowContractTests(unittest.TestCase):
         producer = PRODUCER.read_text(encoding="utf-8")
         canary = CANARY.read_text(encoding="utf-8")
 
-        self.assertIn("push:", producer)
-        self.assertIn("- main", producer)
-        self.assertIn("workflow_dispatch:", producer)
+        self.assertIn("workflow_call:", producer)
+        self.assertIn("checkout_ref:", producer)
+        self.assertIn("ci_image:", producer)
         self.assertNotIn("pull_request", producer)
         self.assertNotIn("pull_request_target", producer)
         self.assertIn("actions: write", producer)
         self.assertIn("actions/cache/restore@v4", producer)
         self.assertIn("actions/cache/save@v4", producer)
         self.assertIn("steps.evidence.outputs.save_allowed == 'true'", producer)
-        self.assertIn("github.ref == 'refs/heads/main'", producer)
+        self.assertNotIn("push:", producer)
+        self.assertIn("uses: ./.github/workflows/conan-cache-producer.yml", CONTAINER.read_text())
 
         self.assertNotIn("actions/cache/save", canary)
         self.assertNotIn("actions: write", canary)
+
+    def test_image_publication_serializes_all_automatic_cache_refreshes(self) -> None:
+        container = CONTAINER.read_text(encoding="utf-8")
+
+        for path in ("conan.lock", "scripts/ci/cache_canary.py"):
+            with self.subTest(path=path):
+                self.assertIn(path, container)
+        self.assertIn("needs.classify.outputs.image_changed == 'true'", container)
+        self.assertIn("needs.build-validate-publish.result == 'success'", container)
+        self.assertIn("github.run_attempt", container)
+        self.assertIn("python3 -m scripts.ci plan", container)
+        self.assertIn('["publish_image"]', container)
+        self.assertNotIn('case "$path"', container)
+        self.assertIn(
+            "ci-arm64-run-${{ github.run_id }}-${{ github.run_attempt }}",
+            container,
+        )
 
     def test_canary_restores_exact_then_compatible_and_never_replaces_pr_gate(self) -> None:
         canary = CANARY.read_text(encoding="utf-8")
@@ -41,6 +60,9 @@ class CacheWorkflowContractTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", canary)
         self.assertIn("sample_role:", canary)
         self.assertIn("cache_generation:", canary)
+        self.assertIn("recovery_from_generation:", canary)
+        self.assertIn("lookup-only: true", canary)
+        self.assertIn("recovery-control.outputs.cache-matched-key", canary)
         self.assertIn("actions: read", canary)
         self.assertIn("actions/cache/restore@v4", canary)
         self.assertIn("key: ${{ steps.identity.outputs.key }}", canary)
@@ -49,6 +71,12 @@ class CacheWorkflowContractTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", canary)
         self.assertNotIn("pull_request_target", canary)
         self.assertNotIn("conan_cache_tunnel.sh", pr_checks)
+
+    def test_warm_canary_mounts_package_payload_cache_read_only(self) -> None:
+        runner = TUNNEL_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("/workspace/.cache/conan-download/c:ro", runner)
+        self.assertIn("--cache-read-only", runner)
 
     def test_both_workflows_emit_bounded_credential_free_evidence(self) -> None:
         for path in (PRODUCER, CANARY):

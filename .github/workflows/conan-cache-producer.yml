@@ -1,23 +1,13 @@
 name: Trusted Conan Cache Producer
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - conan.lock
-      - conanfile.txt
-      - docker/Dockerfile
-      - docker/entrypoint.sh
-      - scripts/ci/cache_canary.py
-      - scripts/ci/conan_cache_tunnel.sh
-      - scripts/ci/orchestration.py
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      cache_generation:
-        description: Cache schema/security generation
+      checkout_ref:
         required: true
-        default: v1
+        type: string
+      ci_image:
+        required: true
         type: string
 
 permissions:
@@ -29,19 +19,23 @@ concurrency:
   group: trusted-conan-cache-producer
   cancel-in-progress: false
 
-env:
-  CI_IMAGE: ghcr.io/200166shang/ros-sdk:ci-arm64-main
-  CACHE_GENERATION: ${{ inputs.cache_generation || vars.CONAN_CACHE_GENERATION || 'v1' }}
-
 jobs:
   produce:
     name: Verify and refresh trusted ARM64 cache
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
+    env:
+      CACHE_GENERATION: ${{ vars.CONAN_CACHE_GENERATION || 'v1' }}
+      CI_IMAGE: ${{ inputs.ci_image }}
     steps:
+      - name: Record end-to-end canary start
+        id: total-start
+        run: echo "unix_ms=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+
       - name: Check out trusted main code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout_ref }}
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -122,6 +116,7 @@ jobs:
           CACHE_RESTORE_FAILED: ${{ steps.restore.outputs.failed }}
           CACHE_RESTORE_SECONDS: ${{ steps.restore.outputs.seconds }}
           REPOSITORY_CACHE_BYTES: ${{ steps.repository-cache.outputs.bytes }}
+          CANARY_START_UNIX_MS: ${{ steps.total-start.outputs.unix_ms }}
           CONAN_SSH_PRIVATE_KEY: ${{ secrets.CONAN_SSH_PRIVATE_KEY }}
           CONAN_SSH_KNOWN_HOSTS: ${{ secrets.CONAN_SSH_KNOWN_HOSTS }}
           CONAN_SSH_HOST: ${{ secrets.CONAN_SSH_HOST }}
@@ -155,6 +150,7 @@ jobs:
               f"{timings['conan']}s / {timings['build']}s / {timings['total']}s",
               f"- Cache: {result['cache_after']['bytes']} bytes, "
               f"{result['cache_after']['files']} files",
+              f"- Warm payload downloads: `{result['payload_downloads']}`",
           ]
           summary.extend(f"- Warning: {warning}" for warning in capacity["warnings"])
           Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(summary) + "\n")

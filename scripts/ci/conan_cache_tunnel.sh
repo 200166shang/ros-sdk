@@ -10,6 +10,7 @@ required=(
   CACHE_RESTORE_FAILED
   CACHE_RESTORE_SECONDS
   REPOSITORY_CACHE_BYTES
+  CANARY_START_UNIX_MS
   CONAN_SSH_PRIVATE_KEY
   CONAN_SSH_KNOWN_HOSTS
   CONAN_SSH_HOST
@@ -43,6 +44,15 @@ if ((ssh_port < 1 || ssh_port > 65535 || target_port < 1 || target_port > 65535)
 fi
 if [[ $CACHE_RESTORE_FAILED != true && $CACHE_RESTORE_FAILED != false ]]; then
   echo "error: cache restore state is invalid" >&2
+  exit 2
+fi
+if [[ $SAMPLE_ROLE != producer && $SAMPLE_ROLE != cold && $SAMPLE_ROLE != warm &&
+  $SAMPLE_ROLE != recovery ]]; then
+  echo "error: cache sample role is invalid" >&2
+  exit 2
+fi
+if [[ $SAMPLE_ROLE == recovery && -z ${RECOVERY_FROM_GENERATION:-} ]]; then
+  echo "error: Recovery requires a previous cache generation" >&2
   exit 2
 fi
 
@@ -104,7 +114,18 @@ if [[ $tunnel_ready != true ]]; then
   exit 1
 fi
 
-mkdir -p .cache/conan-download .cache/conan-canary build
+mkdir -p .cache/conan-download/c .cache/conan-download/locks .cache/conan-canary build
+payload_mount=()
+cache_read_only=false
+if [[ $SAMPLE_ROLE == warm ||
+  ($SAMPLE_ROLE == producer && $CACHE_RESTORE_FAILED == false &&
+    ${MATCHED_CACHE_KEY:-} == "$EXPECTED_CACHE_KEY") ]]; then
+  payload_mount+=(
+    --volume
+    "$PWD/.cache/conan-download/c:/workspace/.cache/conan-download/c:ro"
+  )
+  cache_read_only=true
+fi
 docker run --rm --network host \
   --tmpfs /tmp:rw,nosuid,nodev,size=2g \
   --env CACHE_GENERATION \
@@ -114,10 +135,15 @@ docker run --rm --network host \
   --env CACHE_RESTORE_FAILED \
   --env CACHE_RESTORE_SECONDS \
   --env REPOSITORY_CACHE_BYTES \
+  --env CANARY_START_UNIX_MS \
+  --env "RECOVERY_FROM_GENERATION=${RECOVERY_FROM_GENERATION:-}" \
+  --env "RECOVERY_CONTROL_KEY=${RECOVERY_CONTROL_KEY:-}" \
+  --env "CACHE_READ_ONLY=$cache_read_only" \
   --env CONAN_LOGIN_USERNAME \
   --env CONAN_PASSWORD \
   --env "CONAN_REMOTE_URL=http://127.0.0.1:$local_port" \
   --volume "$PWD:/workspace" \
+  "${payload_mount[@]}" \
   --workdir /workspace \
   "$CI_IMAGE" \
   bash -euo pipefail -c '
@@ -125,6 +151,9 @@ docker run --rm --network host \
     restore_arguments=()
     if [[ "$CACHE_RESTORE_FAILED" == true ]]; then
       restore_arguments+=(--restore-failed)
+    fi
+    if [[ "$CACHE_READ_ONLY" == true ]]; then
+      restore_arguments+=(--cache-read-only)
     fi
     python3 -m scripts.ci cache-run \
       --generation "$CACHE_GENERATION" \
@@ -134,6 +163,9 @@ docker run --rm --network host \
       "${restore_arguments[@]}" \
       --restore-seconds "$CACHE_RESTORE_SECONDS" \
       --repository-cache-bytes "$REPOSITORY_CACHE_BYTES" \
+      --recovery-from-generation "$RECOVERY_FROM_GENERATION" \
+      --recovery-control-key "$RECOVERY_CONTROL_KEY" \
+      --total-start-unix-ms "$CANARY_START_UNIX_MS" \
       --remote rosbridge \
       --remote-url "$CONAN_REMOTE_URL" \
       --cache-dir /workspace/.cache/conan-download \

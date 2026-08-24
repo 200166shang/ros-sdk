@@ -16,6 +16,11 @@ on:
         required: true
         default: v1
         type: string
+      recovery_from_generation:
+        description: Existing generation replaced by a Recovery sample
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: read
@@ -37,6 +42,10 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
+      - name: Record end-to-end canary start
+        id: total-start
+        run: echo "unix_ms=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+
       - name: Check out trusted main code
         uses: actions/checkout@v4
 
@@ -57,7 +66,14 @@ jobs:
           identity=$(docker run --rm \
             --volume "$PWD:/workspace:ro" --workdir /workspace "$CI_IMAGE" \
             python3 -m scripts.ci cache-identity --generation "$CACHE_GENERATION")
-          python3 - "$identity" <<'PY'
+          previous_identity=""
+          if [[ -n "${{ inputs.recovery_from_generation }}" ]]; then
+            previous_identity=$(docker run --rm \
+              --volume "$PWD:/workspace:ro" --workdir /workspace "$CI_IMAGE" \
+              python3 -m scripts.ci cache-identity \
+              --generation "${{ inputs.recovery_from_generation }}")
+          fi
+          python3 - "$identity" "$previous_identity" <<'PY'
           import json
           import os
           import sys
@@ -66,10 +82,29 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"key={identity['key']}\n")
               output.write(f"restore_prefix={identity['restore_prefix']}\n")
+              if sys.argv[2]:
+                  previous = json.loads(sys.argv[2])
+                  output.write(f"previous_key={previous['key']}\n")
           PY
 
       - name: Prepare cache directories
         run: mkdir -p .cache/conan-download .cache/conan-canary
+
+      - name: Look up populated previous-generation Recovery control
+        id: recovery-control
+        if: inputs.sample_role == 'recovery'
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/conan-download
+          key: ${{ steps.identity.outputs.previous_key }}
+          lookup-only: true
+
+      - name: Validate previous-generation Recovery control
+        if: inputs.sample_role == 'recovery'
+        env:
+          EXPECTED_PREVIOUS_KEY: ${{ steps.identity.outputs.previous_key }}
+          MATCHED_PREVIOUS_KEY: ${{ steps.recovery-control.outputs.cache-matched-key }}
+        run: test "$MATCHED_PREVIOUS_KEY" = "$EXPECTED_PREVIOUS_KEY"
 
       - name: Record cache restore start
         run: date +%s%3N > .cache/conan-canary/restore-start-ms
@@ -119,6 +154,9 @@ jobs:
           CACHE_RESTORE_FAILED: ${{ steps.restore.outputs.failed }}
           CACHE_RESTORE_SECONDS: ${{ steps.restore.outputs.seconds }}
           REPOSITORY_CACHE_BYTES: ${{ steps.repository-cache.outputs.bytes }}
+          CANARY_START_UNIX_MS: ${{ steps.total-start.outputs.unix_ms }}
+          RECOVERY_FROM_GENERATION: ${{ inputs.recovery_from_generation }}
+          RECOVERY_CONTROL_KEY: ${{ steps.recovery-control.outputs.cache-matched-key }}
           CONAN_SSH_PRIVATE_KEY: ${{ secrets.CONAN_SSH_PRIVATE_KEY }}
           CONAN_SSH_KNOWN_HOSTS: ${{ secrets.CONAN_SSH_KNOWN_HOSTS }}
           CONAN_SSH_HOST: ${{ secrets.CONAN_SSH_HOST }}
@@ -153,6 +191,9 @@ jobs:
               f"- Cache: {result['cache_after']['bytes']} bytes, "
               f"{result['cache_after']['files']} files",
               f"- Payload changed: `{str(result['payload_changed']).lower()}`",
+              f"- Warm payload downloads: `{result['payload_downloads']}`",
+              f"- Recovery from generation: `{result['recovery_from_generation']}`",
+              f"- Recovery control: `{result['recovery_control_key']}`",
           ]
           summary.extend(f"- Warning: {warning}" for warning in capacity["warnings"])
           Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(summary) + "\n")

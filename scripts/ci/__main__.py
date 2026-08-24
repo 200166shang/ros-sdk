@@ -10,6 +10,26 @@ from pathlib import Path
 from scripts.ci import cache_canary, commands, orchestration
 
 
+def _dependency_files(repository: Path, extras: list[str] | None) -> list[Path]:
+    """Return the mandatory Conan declaration plus additive dependency inputs."""
+    paths = ["conanfile.txt", *(extras or [])]
+    return [repository / path for path in dict.fromkeys(paths)]
+
+
+def _build_cache_identity(args: argparse.Namespace, repository: Path):
+    evidence = cache_canary.collect_environment_evidence(
+        repository,
+        host_profile=args.host_profile,
+        build_profile=args.build_profile,
+    )
+    return cache_canary.build_cache_identity(
+        generation=args.generation,
+        evidence=evidence,
+        lockfile=repository / args.lockfile,
+        dependency_files=_dependency_files(repository, args.dependency_file),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="RosBridge Pro CI helpers")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -80,6 +100,10 @@ def main() -> int:
     cache_run.add_argument("--restore-failed", action="store_true")
     cache_run.add_argument("--restore-seconds", type=float, required=True)
     cache_run.add_argument("--repository-cache-bytes", type=int, required=True)
+    cache_run.add_argument("--cache-read-only", action="store_true")
+    cache_run.add_argument("--recovery-from-generation", default="")
+    cache_run.add_argument("--recovery-control-key", default="")
+    cache_run.add_argument("--total-start-unix-ms", type=int, default=0)
     cache_run.add_argument("--remote", required=True)
     cache_run.add_argument("--remote-url", required=True)
     cache_run.add_argument("--cache-dir", type=Path, required=True)
@@ -95,23 +119,11 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "cache-identity":
         repository = Path.cwd()
-        evidence = cache_canary.collect_environment_evidence(
-            repository,
-            host_profile=args.host_profile,
-            build_profile=args.build_profile,
-        )
-        dependency_files = args.dependency_file or ["conanfile.txt"]
-        identity = cache_canary.build_cache_identity(
-            generation=args.generation,
-            evidence=evidence,
-            lockfile=repository / args.lockfile,
-            dependency_files=[repository / path for path in dependency_files],
-        )
+        identity = _build_cache_identity(args, repository)
         print(json.dumps(identity.to_dict(), indent=2, sort_keys=True))
         return 0
     if args.command == "cache-run":
         repository = Path.cwd()
-        dependency_files = args.dependency_file or ["conanfile.txt"]
         secret_names = (
             "CONAN_LOGIN_USERNAME",
             "CONAN_PASSWORD",
@@ -123,17 +135,7 @@ def main() -> int:
             args.remote_url,
             secrets=secrets,
         )
-        evidence = cache_canary.collect_environment_evidence(
-            repository,
-            host_profile=args.host_profile,
-            build_profile=args.build_profile,
-        )
-        identity = cache_canary.build_cache_identity(
-            generation=args.generation,
-            evidence=evidence,
-            lockfile=repository / args.lockfile,
-            dependency_files=[repository / path for path in dependency_files],
-        )
+        identity = _build_cache_identity(args, repository)
         if identity.key != args.expected_key:
             raise RuntimeError("restored cache identity does not match the execution environment")
         restore = cache_canary.classify_cache_restore(
@@ -154,6 +156,10 @@ def main() -> int:
                 remote_name=args.remote,
                 restore_seconds=args.restore_seconds,
                 repository_cache_bytes=args.repository_cache_bytes,
+                cache_read_only=args.cache_read_only,
+                recovery_from_generation=args.recovery_from_generation,
+                recovery_control_key=args.recovery_control_key,
+                total_start_unix_ms=args.total_start_unix_ms,
                 lockfile=repository / args.lockfile,
                 host_profile=args.host_profile,
                 build_profile=args.build_profile,
