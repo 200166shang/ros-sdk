@@ -330,7 +330,7 @@ jobs:
             -p "$port" -l "$user" "$host" 2>&1); then
             fail_tunnel_setup
           fi
-          if [[ ! "$master_check" =~ ^Master\ running\ \(pid=([0-9]+)\)$ ]]; then
+          if [[ ! "$master_check" =~ ^Master\ running\ \(pid=([0-9]+)\) ]]; then
             fail_tunnel_setup
           fi
           master_pid=${BASH_REMATCH[1]}
